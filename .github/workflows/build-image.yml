@@ -11,7 +11,7 @@ on:
       - '.github/workflows/build-image.yml'
   workflow_dispatch:
 
-# Only one image build at a time; newer pushes supersede an in-flight build.
+# One build at a time; a newer push cancels the in-flight build.
 concurrency:
   group: build-image
   cancel-in-progress: true
@@ -23,6 +23,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 150
+    env:
+      ACNG_DIR: /var/cache/apt-cacher-ng
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,24 +41,59 @@ jobs:
           sudo systemctl start docker
           df -h /
 
-      - name: Install qemu-user-static (pi-gen registers binfmt itself)
+      - name: Install qemu-user-static + apt-cacher-ng
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
+          # qemu: pi-gen self-registers binfmt (F-flag) using the host binary.
+          # apt-cacher-ng: caches every .deb pi-gen downloads, across runs.
+          sudo apt-get install -y qemu-user-static binfmt-support apt-cacher-ng
+
+      # ── CACHE 1: persistent apt package cache (the big win) ─────────────────
+      # Keyed by run_id so each run saves a fresh, growing cache; restore-keys
+      # pulls the most recent. GitHub LRU-evicts old entries (10 GB/repo).
+      - name: Restore apt-cacher-ng cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ACNG_DIR }}
+          key: apt-cacher-ng-${{ github.run_id }}
+          restore-keys: |
+            apt-cacher-ng-
+
+      - name: Start apt-cacher-ng with the restored cache
+        run: |
+          sudo chown -R apt-cacher-ng:apt-cacher-ng "$ACNG_DIR" || true
+          sudo sed -i 's/^# *PassThroughPattern:.*/PassThroughPattern: .*/' \
+            /etc/apt-cacher-ng/acng.conf || true
+          sudo systemctl restart apt-cacher-ng
+          # Reachable from inside the pi-gen container via the docker gateway.
+          for i in $(seq 1 10); do
+            curl -sf http://127.0.0.1:3142/acng-report.html >/dev/null && break
+            sleep 1
+          done
+
+      - name: Verify apt proxy is reachable from a container
+        run: |
+          docker run --rm curlimages/curl:latest \
+            -sf http://172.17.0.1:3142/acng-report.html >/dev/null \
+            && echo "apt-cacher-ng reachable at 172.17.0.1:3142"
 
       - name: Compute rolling version
         id: ver
         run: |
           echo "version=$(date -u +%Y.%m.%d).${{ github.run_number }}+$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Inject image password (optional secret)
+      - name: Configure build (password + apt proxy)
         run: |
           if [ -n "${{ secrets.DVR_USER_PASS }}" ]; then
             sed -i "s|^FIRST_USER_PASS=.*|FIRST_USER_PASS='${{ secrets.DVR_USER_PASS }}'|" pi-gen/config
           fi
+          # Route all pi-gen apt traffic through the host cache.
+          echo "APT_PROXY=http://172.17.0.1:3142" >> pi-gen/config
 
       - name: Build image (pi-gen, Docker)
         working-directory: pi-gen
+        env:
+          DOCKER_BUILDKIT: '1'
         run: ./build.sh
 
       - name: Collect artifacts
@@ -91,3 +128,10 @@ jobs:
             --latest \
             out/${{ steps.collect.outputs.name }} \
             out/${{ steps.collect.outputs.name }}.sha256
+
+      # Make the cache dir readable by the runner so the post-step cache save
+      # can archive it (apt-cacher-ng owns it otherwise). Runs even on failure
+      # so partial downloads are still cached.
+      - name: Prepare cache for save
+        if: always()
+        run: sudo chmod -R a+rX "$ACNG_DIR" || true
