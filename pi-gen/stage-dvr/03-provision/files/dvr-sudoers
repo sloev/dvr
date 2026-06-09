@@ -1,0 +1,2 @@
+# DVR: allow the app user to persist Wi-Fi + capture settings (nothing else).
+pi ALL=(root) NOPASSWD: /usr/local/bin/dvr-wifi-save, /usr/local/bin/dvr-config-save

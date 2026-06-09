@@ -1,0 +1,50 @@
+# /boot/config.txt — RPi DVR
+# Copy this file to /boot/config.txt on the SD card
+
+[all]
+
+# ── Display ──────────────────────────────────────────────────────────────────
+# DSI touchscreen (iPistBit 800×480) — auto-detected on most Pi models
+# If display is upside-down, set display_rotate=2 here
+display_auto_detect=1
+# Prevent HDMI from affecting the DSI output framebuffer
+hdmi_force_hotplug=0
+
+# ── GPU memory — needed for hardware H.264 encoder ───────────────────────────
+gpu_mem=128
+
+# ── KMS/DRM + CMA ────────────────────────────────────────────────────────────
+# The hardware H.264 encoder (v4l2h264enc / bcm2835-codec) and the ISP
+# (v4l2convert) both allocate from CMA. 256 MB keeps 1080p capture+encode
+# happy on Pi 2/3. Pi 4 gets 512 MB in the [pi4] block below.
+dtoverlay=vc4-kms-v3d,cma-256
+max_framebuffers=2
+
+# ── TC358743 HDMI→CSI-2 capture (C790 board) ─────────────────────────────────
+# Disable automatic camera detection that conflicts with tc358743
+camera_auto_detect=0
+# Load the tc358743 overlay on CSI port 0 (change csi-port=1 for CM4 dual-CSI)
+dtoverlay=tc358743
+# If your board uses a 4-lane CSI connector (CM4/Pi 5):
+# dtoverlay=tc358743,4lane=1
+
+# ── I2S audio from TC358743 board ────────────────────────────────────────────
+# The C790 board outputs HDMI audio on I2S pins (GPIO 18/19/20/21)
+# This exposes it as a capture device via the generic i2s-mmap overlay
+dtoverlay=i2s-mmap
+# Alternatively some boards use the hifiberry-dac or generic-i2s overlay:
+# dtoverlay=generic-i2s
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+disable_overscan=1
+# Silence the boot rainbow splash
+disable_splash=1
+# CPU governor — on-demand by default; change to performance if encoding lags
+arm_freq_min=600
+
+# ── Pi 4 specific ─────────────────────────────────────────────────────────────
+[pi4]
+# Enable DRM VC4 V3D driver for Pi4
+dtoverlay=vc4-kms-v3d,cma-512
+
+[all]

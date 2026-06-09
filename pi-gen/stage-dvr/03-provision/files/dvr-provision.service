@@ -1,0 +1,11 @@
+[Unit]
+Description=DVR first-boot provisioning (enable read-only root)
+After=multi-user.target
+ConditionPathExists=!/boot/firmware/.dvr-provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvr-provision.sh
+
+[Install]
+WantedBy=multi-user.target

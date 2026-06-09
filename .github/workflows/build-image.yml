@@ -1,0 +1,91 @@
+name: Build DVR image
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'pi-gen/**'
+      - 'src/**'
+      - 'setup/**'
+      - 'systemd/**'
+      - '.github/workflows/build-image.yml'
+  workflow_dispatch:
+
+# Only one image build at a time; newer pushes supersede an in-flight build.
+concurrency:
+  group: build-image
+  cancel-in-progress: true
+
+permissions:
+  contents: write        # needed to publish the rolling release
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space and relocate Docker to the large volume
+        run: |
+          # pi-gen images are big; the runner's / is small. Reclaim space and
+          # point Docker's data-root at /mnt (~70 GB free on hosted runners).
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache /usr/local/share/boost || true
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h /
+
+      - name: Set up QEMU (armhf emulation for the 32-bit build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Compute rolling version
+        id: ver
+        run: |
+          echo "version=$(date -u +%Y.%m.%d).${{ github.run_number }}+$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Inject image password (optional secret)
+        run: |
+          if [ -n "${{ secrets.DVR_USER_PASS }}" ]; then
+            sed -i "s|^FIRST_USER_PASS=.*|FIRST_USER_PASS='${{ secrets.DVR_USER_PASS }}'|" pi-gen/config
+          fi
+
+      - name: Build image (pi-gen, Docker)
+        working-directory: pi-gen
+        run: ./build.sh
+
+      - name: Collect artifacts
+        id: collect
+        run: |
+          set -e
+          DEPLOY="pi-gen/pi-gen-src/deploy"
+          IMG=$(ls "$DEPLOY"/*.img.xz | head -n1)
+          VER="${{ steps.ver.outputs.version }}"
+          OUT="dvr-${VER}-armhf.img.xz"
+          mkdir -p out
+          cp "$IMG" "out/${OUT}"
+          ( cd out && sha256sum "${OUT}" > "${OUT}.sha256" )
+          ls -lh out
+          echo "name=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rolling release
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Recreate the 'rolling' release so its tag tracks the latest commit.
+          gh release delete rolling --yes --cleanup-tag 2>/dev/null || true
+          gh release create rolling \
+            --title "DVR rolling ${{ steps.ver.outputs.version }}" \
+            --notes "Automated image build from \`${{ github.sha }}\` (${{ steps.ver.outputs.version }}).
+
+          Flash with Raspberry Pi Imager → *Use custom image*, or:
+          \`xzcat dvr-*.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync\`
+
+          Verify: \`sha256sum -c dvr-*.img.xz.sha256\`" \
+            --latest \
+            out/${{ steps.collect.outputs.name }} \
+            out/${{ steps.collect.outputs.name }}.sha256
