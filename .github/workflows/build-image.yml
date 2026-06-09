@@ -39,8 +39,10 @@ jobs:
           sudo systemctl start docker
           df -h /
 
-      - name: Set up QEMU (armhf emulation for the 32-bit build)
-        uses: docker/setup-qemu-action@v3
+      - name: Install qemu-user-static (pi-gen registers binfmt itself)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
 
       - name: Compute rolling version
         id: ver
