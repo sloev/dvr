@@ -34,8 +34,13 @@ cp -r "$REPO/setup"   "$STAGE/01-system/files/setup"
 cp -r "$REPO/systemd" "$STAGE/01-system/files/systemd"
 cp -r "$REPO/src"     "$STAGE/02-app/files/src"
 
-echo "==> Linking stage + config into pi-gen"
-ln -sfn "$STAGE" "$PIGEN_DIR/stage-dvr"
+echo "==> Copying stage + config into pi-gen"
+# Must be a real directory, not a symlink: pi-gen's Dockerfile does
+# `COPY . /pi-gen/`, baking the tree into the build image. An absolute
+# symlink to the host path dangles inside the container and makes
+# `realpath stage-dvr` fail ("No such file or directory").
+rm -rf "$PIGEN_DIR/stage-dvr"
+cp -r "$STAGE" "$PIGEN_DIR/stage-dvr"
 cp "$HERE/config" "$PIGEN_DIR/config"
 # Don't export the intermediate Lite image — we only want the final one.
 touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
