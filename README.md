@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/splash.png" alt="RETRO DVR — portable video recorder" width="640">
+
 # 📼 DVR
 
 ### A lo-fi, DIY field recorder for old camcorders.

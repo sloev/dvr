@@ -28,11 +28,14 @@ fi
 echo "==> Staging DVR sources into the custom stage (single source of truth)"
 rm -rf "$STAGE/01-system/files/setup" \
        "$STAGE/01-system/files/systemd" \
-       "$STAGE/02-app/files/src"
-mkdir -p "$STAGE/01-system/files" "$STAGE/02-app/files"
+       "$STAGE/02-app/files/src" \
+       "$STAGE/02-app/files/assets"
+mkdir -p "$STAGE/01-system/files" "$STAGE/02-app/files/assets"
 cp -r "$REPO/setup"   "$STAGE/01-system/files/setup"
 cp -r "$REPO/systemd" "$STAGE/01-system/files/systemd"
 cp -r "$REPO/src"     "$STAGE/02-app/files/src"
+# Screen-sized boot splash, deployed next to the app at /opt/dvr/assets.
+cp "$REPO/assets/splash-800x480.png" "$STAGE/02-app/files/assets/splash.png"
 
 echo "==> Copying stage + config into pi-gen"
 # Must be a real directory, not a symlink: pi-gen's Dockerfile does

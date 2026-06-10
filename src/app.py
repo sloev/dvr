@@ -51,6 +51,15 @@ C_AMBER  = '#e0a020'
 C_BLUE   = '#3080e0'
 C_BORDER = '#2a2a2a'
 
+# Boot/startup splash — shown fullscreen from app launch until the live
+# preview has frames. Pre-sized to the 800x480 DSI panel so Tk's PhotoImage
+# (PNG-native on Tk 8.6) can load it directly — no Pillow, no runtime scaling.
+SPLASH_CANDIDATES = (
+    os.path.join(os.path.dirname(__file__), 'assets', 'splash.png'),          # deployed: /opt/dvr/assets
+    os.path.join(os.path.dirname(__file__), '..', 'assets', 'splash-800x480.png'),  # dev tree
+)
+SPLASH_HOLD_MS = 2500    # min time the splash stays up after preview attaches
+
 F_MONO   = ('DejaVu Sans Mono', 12)
 F_MONO_L = ('DejaVu Sans Mono', 16)
 F_UI     = ('DejaVu Sans', 13)
@@ -78,6 +87,8 @@ class DVRApp:
         self.storage  = storage
         self.wifi     = wifi
 
+        self._splash       = None
+        self._splash_img   = None
         self._chrome       = True
         self._wifi_open    = False
         self._play_open    = False
@@ -91,6 +102,7 @@ class DVRApp:
         root.wm_attributes('-type', 'splash')   # no WM decorations
 
         self._build()
+        self._show_splash()
         self._wire_pipeline()
         self._wire_storage()
 
@@ -109,6 +121,34 @@ class DVRApp:
             ctx.iteration(False)
             n += 1
         self.root.after(50, self._glib_pump)
+
+    # ── Startup splash ──────────────────────────────────────────────────────────
+
+    def _show_splash(self):
+        """Cover the screen with the boot splash until the preview is live.
+
+        The app autostarts straight after a quiet boot, so this is the first
+        thing on screen — it stands in as the 'boot splash' from launch until
+        the GStreamer preview is producing frames, then it's torn down.
+        """
+        path = next((p for p in SPLASH_CANDIDATES if os.path.exists(p)), None)
+        if not path:
+            return
+        try:
+            self._splash_img = tk.PhotoImage(file=path)
+        except tk.TclError:
+            self._splash_img = None
+            return
+        self._splash = tk.Label(self.root, image=self._splash_img,
+                                bg='black', bd=0, highlightthickness=0)
+        self._splash.place(x=0, y=0, width=W, height=H)
+        self._splash.lift()
+
+    def _hide_splash(self):
+        if self._splash is not None:
+            self._splash.destroy()
+            self._splash = None
+            self._splash_img = None
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -287,6 +327,9 @@ class DVRApp:
         xid = self.video_frame.winfo_id()
         self.pipeline.set_xid(xid)
         self.pipeline.play()
+        # Hold the splash a beat so the first live frames are up before reveal.
+        if self._splash is not None:
+            self.root.after(SPLASH_HOLD_MS, self._hide_splash)
 
     def _wire_pipeline(self):
         self.pipeline.on_level        = self._on_level
