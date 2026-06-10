@@ -20,7 +20,28 @@ permissions:
   contents: write        # needed to publish the rolling release
 
 jobs:
+  preview:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb scrot xdotool
+
+      - name: Generate previews
+        run: ./generate_preview.sh
+
+      - name: Upload preview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-previews
+          path: previews/*.png
+
   build:
+    needs: preview
     runs-on: ubuntu-22.04
     timeout-minutes: 150
     env:
@@ -96,6 +117,12 @@ jobs:
           DOCKER_BUILDKIT: '1'
         run: ./build.sh
 
+      - name: Download preview artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-previews
+          path: previews
+
       - name: Collect artifacts
         id: collect
         run: |
@@ -107,6 +134,8 @@ jobs:
           mkdir -p out
           cp "$IMG" "out/${OUT}"
           ( cd out && sha256sum "${OUT}" > "${OUT}.sha256" )
+          # Also copy previews for release attachment
+          cp previews/*.png out/
           ls -lh out
           echo "name=${OUT}" >> "$GITHUB_OUTPUT"
 
@@ -127,7 +156,8 @@ jobs:
           Verify: \`sha256sum -c dvr-*.img.xz.sha256\`" \
             --latest \
             out/${{ steps.collect.outputs.name }} \
-            out/${{ steps.collect.outputs.name }}.sha256
+            out/${{ steps.collect.outputs.name }}.sha256 \
+            out/*.png
 
       # Make the cache dir readable by the runner so the post-step cache save
       # can archive it (apt-cacher-ng owns it otherwise). Runs even on failure

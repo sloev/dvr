@@ -12,26 +12,35 @@ os.environ.setdefault("DISPLAY", ":0")
 os.environ.setdefault("GST_PLUGIN_PATH",
                       "/usr/lib/arm-linux-gnueabihf/gstreamer-1.0")
 
-import gi
-gi.require_version("Gst", "1.0")
-from gi.repository import Gst
+# DVR_UI_PREVIEW=1 runs the whole UI on a dev box with no GStreamer/hardware —
+# for iterating on layout. Real hardware path imports Gst; the stub path skips it.
+PREVIEW = os.environ.get("DVR_UI_PREVIEW") == "1"
 
 import tkinter as tk
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from pipeline import Pipeline
-from storage  import StorageManager
-from wifi     import WifiManager
-from app      import DVRApp
+from app import DVRApp
 
 
 def main():
-    Gst.init(None)
+    if PREVIEW:
+        from stubs import FakePipeline as Pipeline, \
+                          FakeStorage as StorageManager, \
+                          FakeWifi as WifiManager
+    else:
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+        Gst.init(None)
+        from pipeline import Pipeline
+        from storage  import StorageManager
+        from wifi     import WifiManager
 
     root = tk.Tk()
-    # Hide cursor on the touchscreen
-    root.config(cursor='none')
+    if not PREVIEW:
+        # Hide cursor on the touchscreen (keep it on a dev box)
+        root.config(cursor='none')
 
     storage  = StorageManager()
     storage.start()

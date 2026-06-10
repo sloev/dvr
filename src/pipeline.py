@@ -73,9 +73,10 @@ class Pipeline:
 
         # Callbacks (attached by the UI)
         self.on_signal_change = None  # (bool has_signal)
-        self.on_level         = None  # (float left_db, float right_db)
+        self.on_level         = None  # (peak_l, peak_r, rms_l, rms_r) dBFS
         self.on_error         = None  # (str message)
         self.on_clip_started  = None  # (str filepath)
+        self.on_still_saved   = None  # (str filepath)
 
         self._build()
 
@@ -98,7 +99,10 @@ class Pipeline:
             "audio/x-raw,rate=48000,channels=2 ! "
             "tee name=atee allow-not-linked=true "
             "atee. ! queue leaky=downstream max-size-buffers=2 ! "
-            "level name=alevel interval=50000000 ! "   # 50 ms VU updates
+            # 50 ms updates; peak-hold ballistics (1.5 s hold, 12 dB/s falloff)
+            # so 'decay' is PPM-like. The UI also applies its own ballistics.
+            "level name=alevel interval=50000000 post-messages=true "
+            "peak-ttl=1500000000 peak-falloff=12 ! "
             "fakesink sync=false "
         )
         self._pipeline = Gst.parse_launch(desc)
@@ -158,9 +162,14 @@ class Pipeline:
                 return
             self._output_dir = output_dir
             self._clip_index = 0
-            self._recording  = True
-            self._rec_start  = time.monotonic()
-            self._start_clip()
+            try:
+                self._start_clip()
+                self._recording = True
+                self._rec_start = time.monotonic()
+            except Exception as e:
+                self._recording = False
+                if self.on_error:
+                    self.on_error(f"Failed to start recording: {e}")
 
     def stop_recording(self):
         with self._lock:
@@ -185,7 +194,12 @@ class Pipeline:
             self._finalize_clip()
             if start_new and self._recording:
                 self._clip_index += 1
-                self._start_clip()
+                try:
+                    self._start_clip()
+                except Exception as e:
+                    self._recording = False
+                    if self.on_error:
+                        self.on_error(f"Failed to split clip: {e}")
 
     # ── Add the record branch ─────────────────────────────────────────────────
 
@@ -209,17 +223,25 @@ class Pipeline:
 
             f"mp4mux name=mux ! filesink name=fsink async=false location=\"{path}\" "
         )
-        bin_ = Gst.parse_bin_from_description(desc, False)
+        try:
+            bin_ = Gst.parse_bin_from_description(desc, False)
+        except Exception as e:
+            raise RuntimeError(f"GStreamer parse error: {e}")
+
         bin_._eos_v = False
         bin_._eos_a = False
 
         # Expose the two queue sink pads as named ghost pads.
         for qname, gname in (("vq", "v"), ("aq", "a")):
             q = bin_.get_by_name(qname)
+            if not q:
+                raise RuntimeError(f"Could not find queue {qname} in record bin")
             bin_.add_pad(Gst.GhostPad.new(gname, q.get_static_pad("sink")))
 
         # Detect EOS reaching the filesink → clip fully flushed.
         fsink = bin_.get_by_name("fsink")
+        if not fsink:
+            raise RuntimeError("Could not find filesink in record bin")
         fsink.get_static_pad("sink").add_probe(
             Gst.PadProbeType.EVENT_DOWNSTREAM, self._on_filesink_event)
 
@@ -227,10 +249,19 @@ class Pipeline:
 
         self._rec_vpad = self._vtee.get_request_pad("src_%u")
         self._rec_apad = self._atee.get_request_pad("src_%u")
+        if not self._rec_vpad or not self._rec_apad:
+            self._pipeline.remove(bin_)
+            raise RuntimeError("Could not request tee pads")
+
         self._rec_vpad.link(bin_.get_static_pad("v"))
         self._rec_apad.link(bin_.get_static_pad("a"))
 
-        bin_.sync_state_with_parent()
+        if bin_.sync_state_with_parent() == Gst.StateChangeReturn.FAILURE:
+            self._vtee.release_request_pad(self._rec_vpad)
+            self._atee.release_request_pad(self._rec_apad)
+            self._pipeline.remove(bin_)
+            raise RuntimeError("Could not sync record bin state")
+
         self._rec_bin = bin_
         self._eos_done.clear()
 
@@ -240,6 +271,74 @@ class Pipeline:
 
         if self.on_clip_started:
             self.on_clip_started(path)
+
+    # ── Still frame grab ──────────────────────────────────────────────────────
+
+    def grab_still(self, path: str) -> bool:
+        """
+        Capture one preview frame to a JPEG, independent of recording.
+
+        Adds a transient branch off the video tee (software videoconvert so it
+        never contends with the encoder's ISP context during recording),
+        encodes a single frame, then tears the branch down. A lone JPEG buffer
+        is a complete file, so no EOS dance is needed — we just stop after the
+        first frame and drop the rest.
+        """
+        with self._lock:
+            if self._pipeline is None or self._vtee is None:
+                return False
+            try:
+                desc = (
+                    "queue name=gq leaky=downstream max-size-buffers=1 ! "
+                    "videoconvert ! video/x-raw,format=I420 ! "
+                    "jpegenc quality=85 ! "
+                    f"filesink name=gfsink async=false location=\"{path}\""
+                )
+                bin_ = Gst.parse_bin_from_description(desc, False)
+                q = bin_.get_by_name("gq")
+                bin_.add_pad(Gst.GhostPad.new("sink", q.get_static_pad("sink")))
+                self._pipeline.add(bin_)
+                gpad = self._vtee.get_request_pad("src_%u")
+                gpad.link(bin_.get_static_pad("sink"))
+                bin_.sync_state_with_parent()
+            except Exception as e:
+                if self.on_error:
+                    self.on_error(f"grab: {e}")
+                return False
+
+        done = {"v": False}
+        fsink = bin_.get_by_name("gfsink")
+
+        def _teardown():
+            # Block the tee feed, unlink and dispose of the branch.
+            gpad.add_probe(Gst.PadProbeType.BLOCK_DOWNSTREAM,
+                           lambda p, i: Gst.PadProbeReturn.OK)
+            try:
+                gpad.unlink(bin_.get_static_pad("sink"))
+            except Exception:
+                pass
+            bin_.set_state(Gst.State.NULL)
+            try:
+                self._vtee.release_request_pad(gpad)
+            except Exception:
+                pass
+            try:
+                self._pipeline.remove(bin_)
+            except Exception:
+                pass
+            if self.on_still_saved:
+                self.on_still_saved(path)
+            return False   # GLib.idle_add: run once
+
+        def _on_buf(pad, info):
+            if done["v"]:
+                return Gst.PadProbeReturn.DROP   # only the first frame
+            done["v"] = True
+            GLib.idle_add(_teardown)
+            return Gst.PadProbeReturn.OK         # let this one through to disk
+
+        fsink.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, _on_buf)
+        return True
 
     # ── Remove the record branch with a clean EOS ─────────────────────────────
 
@@ -309,6 +408,10 @@ class Pipeline:
     def _on_element(self, bus, msg):
         s = msg.get_structure()
         if s and s.get_name() == "level" and self.on_level:
-            decay = s.get_value("decay")
-            if decay and len(decay) >= 2:
-                self.on_level(float(decay[0]), float(decay[1]))
+            peak = s.get_value("peak")
+            rms  = s.get_value("rms")
+            if peak and rms and len(peak) >= 2 and len(rms) >= 2:
+                # Per-channel instantaneous peak + RMS, both in dBFS. The UI
+                # turns these into PPM/VU ballistics and a clip indicator.
+                self.on_level(float(peak[0]), float(peak[1]),
+                              float(rms[0]),  float(rms[1]))

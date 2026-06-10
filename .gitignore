@@ -13,6 +13,7 @@ pi-gen/stage-dvr/02-app/files/assets/
 
 # CI collection dir
 out/
+previews/
 
 # Python
 __pycache__/
