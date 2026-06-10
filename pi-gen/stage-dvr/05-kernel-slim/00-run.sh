@@ -27,8 +27,8 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 
 DROP="
-linux-image-rpi-v6 linux-image-rpi-v7l linux-image-rpi-v8
-linux-headers-rpi-v6 linux-headers-rpi-v7 linux-headers-rpi-v7l linux-headers-rpi-v8
+linux-image-rpi-v6 linux-image-rpi-v8
+linux-headers-rpi-v6 linux-headers-rpi-v7 linux-headers-rpi-v8
 "
 to_drop=""
 for p in $DROP; do

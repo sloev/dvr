@@ -71,7 +71,7 @@ done
 # strips man/info). Guarded by the export step's own -f checks.
 rm -rf /usr/share/man/* /usr/share/info/* \
        /usr/share/doc/* /usr/share/lintian \
-       /var/lib/apt/lists/* /var/cache/apt/archives/*.deb 2>/dev/null || true
+       /var/cache/apt/archives/*.deb 2>/dev/null || true
 
 # Keep only the en_US locale data.
 find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
