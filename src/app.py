@@ -210,6 +210,9 @@ class DVRApp:
         self._wire_pipeline()
         self._wire_storage()
 
+        # Force initial render
+        self.root.update()
+
         root.after(150, self._attach_preview)
         root.after(200, self._tick)
         root.after(50,  self._meter_tick)
@@ -296,6 +299,10 @@ class DVRApp:
         self._input_lbl = tk.Label(self.top, text='NO SIGNAL',
                                     bg=C_PANEL, fg=C_DIM, font=F_SMALL)
         self._input_lbl.pack(side='left', padx=2)
+
+        # CI Debug label (bright white)
+        tk.Label(self.top, text='CI-TEST', bg='#ffffff', fg='#000000',
+                 font=F_SMALL, padx=4).pack(side='left', padx=10)
 
         self._tc_lbl = tk.Label(self.top, text='00:00:00:00',
                                 bg=C_PANEL, fg=C_TEXT, font=F_MONO_L)

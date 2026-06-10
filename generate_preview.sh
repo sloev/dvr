@@ -23,14 +23,14 @@ XVFB_PID=$!
 # Give Xvfb a moment to start
 sleep 2
 
-# Start the app and capture logs
-python3 src/main.py > "$OUT_DIR/app.log" 2>&1 &
+# Start the app and capture logs (unbuffered)
+python3 -u src/main.py > "$OUT_DIR/app.log" 2>&1 &
 APP_PID=$!
 
 echo "==> Waiting for UI to render (Idle)..."
 # Wait for the splash screen to pass (SPLASH_HOLD_MS = 2500)
-# and for the app to settle
-sleep 7
+# and for the app to settle. We wait 10s to be absolutely sure.
+sleep 10
 scrot "$OUT_DIR/preview_idle.png"
 
 echo "==> Toggling Recording..."

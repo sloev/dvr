@@ -15,6 +15,7 @@ import time
 
 class FakePipeline:
     def __init__(self):
+        print("FakePipeline: init (preview mode)")
         self.width, self.height, self.fps = 1920, 1080, "25/1"
         self.bitrate = 10_000_000
         self._recording = False

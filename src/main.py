@@ -25,6 +25,7 @@ from app import DVRApp
 
 def main():
     if PREVIEW:
+        print("DVR: starting in PREVIEW mode (hardware stubs)")
         from stubs import FakePipeline as Pipeline, \
                           FakeStorage as StorageManager, \
                           FakeWifi as WifiManager
