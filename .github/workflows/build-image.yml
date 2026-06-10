@@ -72,6 +72,9 @@ jobs:
       # ── CACHE 1: persistent apt package cache (the big win) ─────────────────
       # Keyed by run_id so each run saves a fresh, growing cache; restore-keys
       # pulls the most recent. GitHub LRU-evicts old entries (10 GB/repo).
+      - name: Prepare cache directory permissions
+        run: sudo mkdir -p ${{ env.ACNG_DIR }} && sudo chown -R runner:runner ${{ env.ACNG_DIR }}
+
       - name: Restore apt-cacher-ng cache
         uses: actions/cache@v4
         with:
@@ -91,12 +94,6 @@ jobs:
             curl -sf http://127.0.0.1:3142/acng-report.html >/dev/null && break
             sleep 1
           done
-
-      - name: Verify apt proxy is reachable from a container
-        run: |
-          docker run --rm curlimages/curl:latest \
-            -sf http://172.17.0.1:3142/acng-report.html >/dev/null \
-            && echo "apt-cacher-ng reachable at 172.17.0.1:3142"
 
       - name: Compute rolling version
         id: ver
