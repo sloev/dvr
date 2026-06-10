@@ -11,6 +11,9 @@ on:
       - '.github/workflows/build-image.yml'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # One build at a time; a newer push cancels the in-flight build.
 concurrency:
   group: build-image

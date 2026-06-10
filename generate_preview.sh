@@ -17,26 +17,28 @@ export DVR_UI_PREVIEW=1
 export DISPLAY=:99
 
 # Start xvfb in the background
-Xvfb :99 -screen 0 $RES &
+Xvfb :99 -screen 0 $RES -ac +extension GLX +render -noreset &
 XVFB_PID=$!
 
 # Give Xvfb a moment to start
 sleep 2
 
-# Start the app
-python3 src/main.py &
+# Start the app and capture logs
+python3 src/main.py > "$OUT_DIR/app.log" 2>&1 &
 APP_PID=$!
 
 echo "==> Waiting for UI to render (Idle)..."
 # Wait for the splash screen to pass (SPLASH_HOLD_MS = 2500)
-sleep 5
+# and for the app to settle
+sleep 7
 scrot "$OUT_DIR/preview_idle.png"
 
 echo "==> Toggling Recording..."
 # REC button is at approx (722, 436)
+# x=722, y=436 (BOT_H=88, H=480, so bottom row starts at 392. 392 + 44 = 436)
 xdotool mousemove 722 436 click 1
 
-sleep 2
+sleep 3
 scrot "$OUT_DIR/preview_recording.png"
 
 echo "==> Toggling Menu..."
@@ -44,8 +46,11 @@ echo "==> Toggling Menu..."
 # 8 + 86/2 = 51
 xdotool mousemove 51 436 click 1
 
-sleep 1
+sleep 2
 scrot "$OUT_DIR/preview_menu.png"
+
+echo "==> Application Logs:"
+cat "$OUT_DIR/app.log"
 
 echo "==> Cleaning up..."
 kill $APP_PID || true

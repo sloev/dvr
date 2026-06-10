@@ -173,6 +173,7 @@ class Meter:
 
 class DVRApp:
     def __init__(self, root, pipeline, storage, wifi):
+        print(f"DVRApp: initializing on {W}x{H} (preview={os.environ.get('DVR_UI_PREVIEW')})...")
         self.root     = root
         self.pipeline = pipeline
         self.storage  = storage
@@ -192,10 +193,17 @@ class DVRApp:
         self._lvl_peak   = [Meter.DB_MIN, Meter.DB_MIN]
         self._lvl_rms    = [Meter.DB_MIN, Meter.DB_MIN]
 
-        root.title('')
+        root.title('DVR')
         root.configure(bg='black')
-        root.attributes('-fullscreen', True)
-        root.wm_attributes('-type', 'splash')
+        root.geometry(f'{W}x{H}+0+0')
+        if os.environ.get('DVR_UI_PREVIEW') != '1':
+            root.attributes('-fullscreen', True)
+            # Use splash type on Pi to ensure it stays on top of any other UI
+            try: root.wm_attributes('-type', 'splash')
+            except: pass
+        else:
+            # On dev box, don't hijack the whole screen if not requested
+            root.overrideredirect(True)
 
         self._build()
         self._show_splash()

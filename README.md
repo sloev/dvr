@@ -18,18 +18,16 @@
 
 ---
 
-```
-┌─────────────────────────────────────────────┐
-│ ●live  1920×1080 25p      12:04:53:11   48°C │
-│                                              │
-│            ( live HDMI preview )             │
-│                                              │
-│ ●REC  12.3GB  ▓▓░  ⊕ ▶ ⏏ WiFi ⚙ ⏻          │
-└─────────────────────────────────────────────┘
-```
-
 A 800×480 touchscreen, a live preview that's **always on**, and one big red
 button. Plug in a tape deck, hit record, pull the power when you're done.
+
+### Interface
+
+![Idle](https://github.com/sloev/dvr/releases/download/rolling/preview_idle.png)
+
+![Recording](https://github.com/sloev/dvr/releases/download/rolling/preview_recording.png)
+
+![Menu](https://github.com/sloev/dvr/releases/download/rolling/preview_menu.png)
 
 ## ✨ Features
 
