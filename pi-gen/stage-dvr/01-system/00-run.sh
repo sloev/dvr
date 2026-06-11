@@ -66,24 +66,32 @@ fi
 install -m 644 files/systemd/tc358743.service \
     "${ROOTFS_DIR}/etc/systemd/system/tc358743.service"
 
-# ── 6. Kiosk autostart: autologin tty1 → startx → app (no display manager) ───
-# Xwrapper lets the 'pi' user start X from the console.
-install -d "${ROOTFS_DIR}/etc/X11"
-cat > "${ROOTFS_DIR}/etc/X11/Xwrapper.config" <<'EOF'
-allowed_users=anybody
-needs_root_rights=yes
+# ── 6. Kiosk autostart: autologin tty1 → weston → app (Wayland/Weston) ───
+install -d "${ROOTFS_DIR}/etc/xdg/weston"
+cat > "${ROOTFS_DIR}/etc/xdg/weston/weston.ini" <<'EOF'
+[core]
+shell=kiosk-shell.so
+xwayland=true
+idle-time=0
+
+[libinput]
+enable-tap=true
+
+[shell]
+client=/usr/local/bin/dvr-start.sh
 EOF
 
-# Touchscreen input (calibration identity matrix; flip if rotated)
-install -d "${ROOTFS_DIR}/etc/X11/xorg.conf.d"
-cat > "${ROOTFS_DIR}/etc/X11/xorg.conf.d/99-touch.conf" <<'EOF'
-Section "InputClass"
-    Identifier "DSI touchscreen"
-    MatchIsTouchscreen "on"
-    Driver "libinput"
-    Option "TransformationMatrix" "1 0 0 0 1 0 0 0 1"
-EndSection
+# Start wrapper script that loads dvr.env and restarts the app if it exits
+cat > "${ROOTFS_DIR}/usr/local/bin/dvr-start.sh" <<'EOF'
+#!/bin/sh
+while :; do
+    [ -f /boot/firmware/dvr.env ] && . /boot/firmware/dvr.env
+    export DVR_WIDTH DVR_HEIGHT DVR_FPS DVR_BITRATE DVR_CLIP_SECONDS
+    python3 /opt/dvr/main.py
+    sleep 2
+done
 EOF
+chmod +x "${ROOTFS_DIR}/usr/local/bin/dvr-start.sh"
 
 # Autologin on tty1
 install -d "${ROOTFS_DIR}/etc/systemd/system/getty@tty1.service.d"
@@ -93,27 +101,17 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin pi --noclear %I $TERM
 EOF
 
-# Launch X only on tty1, once.
+# Launch Weston only on tty1, once.
 cat > "${ROOTFS_DIR}/home/pi/.bash_profile" <<'EOF'
-if [ "$(tty)" = "/dev/tty1" ] && [ -z "$DISPLAY" ]; then
-    exec startx -- -nocursor vt1 >/dev/null 2>&1
+if [ "$(tty)" = "/dev/tty1" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    export XDG_RUNTIME_DIR=/run/user/$(id -u)
+    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+        export XDG_RUNTIME_DIR=/tmp/wayland-runtime-$(id -u)
+        mkdir -p "$XDG_RUNTIME_DIR"
+        chmod 700 "$XDG_RUNTIME_DIR"
+    fi
+    exec weston --shell=kiosk-shell.so >/dev/null 2>&1
 fi
-EOF
-
-# X session: no blanking, auto-restart the app if it ever exits.
-# Optional /boot/firmware/dvr.env (editable on the SD card) can set capture
-# resolution etc. without rebuilding — e.g. DVR_WIDTH=1280 DVR_HEIGHT=720.
-cat > "${ROOTFS_DIR}/home/pi/.xinitrc" <<'EOF'
-#!/bin/sh
-xset s off -dpms s noblank
-while :; do
-    # Re-source each launch so a persisted setting change survives an
-    # in-session app restart (not just a reboot).
-    [ -f /boot/firmware/dvr.env ] && . /boot/firmware/dvr.env
-    export DVR_WIDTH DVR_HEIGHT DVR_FPS DVR_BITRATE DVR_CLIP_SECONDS
-    python3 /opt/dvr/main.py
-    sleep 2
-done
 EOF
 
 # Seed a documented, commented env file on the FAT partition.
@@ -128,8 +126,7 @@ cat > "${FW}/dvr.env" <<'EOF'
 #DVR_CLIP_SECONDS=1800
 EOF
 on_chroot <<'EOF'
-chown pi:pi /home/pi/.bash_profile /home/pi/.xinitrc
-chmod +x /home/pi/.xinitrc
+chown pi:pi /home/pi/.bash_profile
 EOF
 
 # ── 7. Enable our services; disable graphical target (we use startx) ─────────

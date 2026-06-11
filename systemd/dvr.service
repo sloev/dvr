@@ -1,29 +1,17 @@
 [Unit]
-Description=DVR HDMI Capture Application
-After=tc358743.service graphical-session.target network.target
+Description=DVR HDMI Capture Application (Weston kiosk)
+After=tc358743.service network.target
 Wants=tc358743.service
 
 [Service]
 User=pi
 Group=pi
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/pi/.Xauthority
-Environment=HOME=/home/pi
-Environment=GST_DEBUG=2
-# Capture resolution — must match the HDMI source the TC358743 receives.
-# Pi 2B testing at 720p: uncomment the next line. Pi 3B / 1080p source: leave commented.
-#Environment=DVR_WIDTH=1280 DVR_HEIGHT=720
-
-# Wait for X server
-ExecStartPre=/usr/bin/xinit /home/pi/.xinitrc -- :0 vt1 &
-ExecStartPre=/bin/sleep 3
-
-ExecStart=/usr/bin/python3 /opt/dvr/main.py
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/weston --shell=kiosk-shell.so
 Restart=always
 RestartSec=3
 StandardOutput=journal
 StandardError=journal
-KillMode=process
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

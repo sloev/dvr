@@ -16,11 +16,8 @@ udisks2
 exfatprogs
 dosfstools
 parted
-xserver-xorg-core
-xserver-xorg-legacy
-xserver-xorg-input-libinput
-xinit
-x11-xserver-utils
+weston
+xwayland
 fonts-dejavu-core
 mpv
 overlayroot

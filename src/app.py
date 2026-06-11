@@ -617,6 +617,14 @@ class DVRApp:
         else:
             self._show_overlay('Eject failed', C_RED, dismiss_ms=2500)
 
+    def _format_done(self, ok):
+        self._hide_overlay()
+        if ok:
+            self._show_overlay('Format complete', C_GREEN, dismiss_ms=2500)
+            self._refresh_clips()
+        else:
+            self._show_overlay('Format failed', C_RED, dismiss_ms=2500)
+
     # ── Playback ──────────────────────────────────────────────────────────────────
 
     def _refresh_clips(self):
@@ -759,7 +767,9 @@ class DVRApp:
     )
 
     def _settings_dialog(self):
-        dlg = self._dialog('Settings', 360, 380)
+        mp = self.storage.primary_mount
+        h_dim = 480 if mp else 380
+        dlg = self._dialog('Settings', 360, h_dim)
         body = tk.Frame(dlg, bg=C_PANEL)
         body.pack(fill='both', expand=True, padx=20, pady=6)
 
@@ -798,6 +808,25 @@ class DVRApp:
             mark = '  ●' if self._meter_mode == m else ''
             _btn(mrow, m + mark, lambda m=m: set_mode(m)).pack(
                 side='left', fill='x', expand=True, padx=3, ipady=8)
+
+        if mp:
+            tk.Label(body, text='Storage formatting', bg=C_PANEL, fg=C_TEXT,
+                     font=F_UI).pack(pady=(12, 2))
+            def do_format():
+                dlg.destroy()
+                dev = next((d for d, m in self.storage.drives.items() if m == mp), None)
+                if not dev:
+                    self._show_overlay('No USB dev found', C_RED, dismiss_ms=2500)
+                    return
+                def on_confirm():
+                    self._show_overlay('Formatting…', C_AMBER)
+                    def format_worker():
+                        ok = self.storage.format_usb(dev, 'DVR')
+                        self.root.after(0, lambda: self._format_done(ok))
+                    threading.Thread(target=format_worker, daemon=True).start()
+                self._confirm('Format USB', 'Format USB drive as exFAT?\nALL recordings will be deleted.', on_confirm, yes='Format')
+            _btn(body, 'Format USB', do_format, bg=C_RED, fg='white', activebackground=C_REDDK).pack(
+                fill='x', pady=3, ipady=8)
 
         _btn(body, 'Close', dlg.destroy).pack(fill='x', pady=(12, 4), ipady=6)
 

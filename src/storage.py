@@ -86,12 +86,13 @@ class StorageManager:
 
     def format_usb(self, device: str, label: str = "DVR") -> bool:
         """
-        Quick-format the first partition of device as exFAT.
+        Quick-format the partition as exFAT.
         DESTRUCTIVE — only called after explicit user confirmation.
         """
-        partition = device + "1"
+        partition = device if (device and device[-1].isdigit()) else (device + "1")
         try:
             subprocess.run(["umount", partition], timeout=5)
+            subprocess.run(["udisksctl", "unmount", "--block-device", partition, "--no-user-interaction"], timeout=5)
         except Exception:
             pass
         try:

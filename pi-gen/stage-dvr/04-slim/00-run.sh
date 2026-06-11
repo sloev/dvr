@@ -55,7 +55,7 @@ apt-get clean
 for keep in \
     network-manager wpasupplicant udisks2 \
     mpv v4l-utils exfatprogs dosfstools \
-    xserver-xorg-core xserver-xorg-legacy xinit x11-xserver-utils \
+    weston xwayland \
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-x gstreamer1.0-alsa \
     python3 python3-gi python3-tk python3-psutil \

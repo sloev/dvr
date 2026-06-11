@@ -145,7 +145,7 @@ Python application using PyQt5 + GStreamer:
 | Auto-start | systemd dvr.service |
 | Input info HUD | resolution, framerate, format |
 | Scene markers | keypress → append timestamps.txt on USB |
-| Loop record mode | ring buffer, configurable total size |
+| Loop record mode | (Dropped) |
 | Quick USB format | mkfs.exfat via subprocess |
 | CPU temp display | /sys/class/thermal/thermal_zone0/temp |
 
