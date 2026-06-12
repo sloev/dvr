@@ -62,9 +62,14 @@ class FakePipeline:
 
     def grab_still(self, path):
         try:
-            open(path, "wb").close()
-        except OSError:
-            pass
+            from PIL import Image
+            img = Image.new('RGB', (1920, 1080), color=(100, 150, 200))
+            img.save(path, format='JPEG')
+        except Exception:
+            try:
+                open(path, "wb").close()
+            except OSError:
+                pass
         if self.on_still_saved:
             self.on_still_saved(path)
         return True

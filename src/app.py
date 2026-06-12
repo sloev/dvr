@@ -28,7 +28,7 @@ from datetime import datetime
 
 import tkinter as tk
 import io
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import system
 
@@ -75,9 +75,13 @@ SPLASH_HOLD_MS = 2500
 
 
 def _btn(parent, text, cmd, font=F_BTN, **kw):
+    bg = kw.pop('bg', C_PANEL2)
+    fg = kw.pop('fg', C_TEXT)
+    abg = kw.pop('activebackground', C_BORDER)
+    afg = kw.pop('activeforeground', 'white')
     b = tk.Button(parent, text=text, command=cmd,
-                  bg=C_PANEL2, fg=C_TEXT,
-                  activebackground=C_BORDER, activeforeground='white',
+                  bg=bg, fg=fg,
+                  activebackground=abg, activeforeground=afg,
                   relief='flat', bd=0, cursor='hand2', font=font, **kw)
     return b
 
@@ -180,6 +184,7 @@ class DVRApp:
         self.pipeline = pipeline
         self.storage  = storage
         self.wifi     = wifi
+        self._is_preview = os.environ.get('DVR_UI_PREVIEW') == '1'
 
         self._splash      = None
         self._splash_img  = None
@@ -296,6 +301,10 @@ class DVRApp:
         self._build_play_panel()
 
         self._update_action_row()
+
+        if self._is_preview:
+            self._mock_preview_lbl = tk.Label(self.video_frame, bg='black')
+            self._mock_preview_lbl.place(x=0, y=TOP_H, width=W, height=H - TOP_H - BOT_H)
 
     def _build_top(self):
         self.top = tk.Frame(self.root, bg=C_PANEL, height=TOP_H)
@@ -543,6 +552,10 @@ class DVRApp:
 
         if self.pipeline.recording:
             self._rec_btn.config(text=f'■ {system.format_duration(self.pipeline.rec_elapsed)}')
+
+        if self._is_preview:
+            self._draw_mock_preview()
+
         self.root.after(200, self._tick)
 
     def _meter_tick(self):
@@ -802,6 +815,50 @@ class DVRApp:
     def _menu_stopmotion(self):
         self._close_menu()
         self._toggle_stopmotion_mode()
+
+    def _draw_mock_preview(self):
+        # Create a test pattern image
+        img = Image.new('RGB', (800, 346), color='black')
+        draw = ImageDraw.Draw(img)
+        
+        # Draw 8 vertical color bars
+        bar_w = 800 // 8
+        colors = [
+            (220, 220, 220), # White
+            (220, 220, 0),   # Yellow
+            (0, 220, 220),   # Cyan
+            (0, 220, 0),     # Green
+            (220, 0, 220),   # Magenta
+            (220, 0, 0),     # Red
+            (0, 0, 220),     # Blue
+            (20, 20, 20)     # Black/Dark grey
+        ]
+        for i, c in enumerate(colors):
+            draw.rectangle([i * bar_w, 0, (i + 1) * bar_w, 346], fill=c)
+            
+        # Draw test circle
+        draw.ellipse([300, 73, 500, 273], outline=(255, 255, 255), width=3)
+        
+        # If recording, draw a red "REC" indicator and elapsed time
+        if self.pipeline.recording:
+            draw.rectangle([10, 10, 150, 45], fill=(40, 0, 0), outline=(220, 30, 30), width=2)
+            draw.ellipse([20, 22, 30, 32], fill=(220, 30, 30))
+        
+        # If onion skin is enabled and we have a last frame, blend it!
+        if self._stopmotion_mode and self._onion_enabled and self._stopmotion_project_dir and self._stopmotion_frame_count > 0:
+            path = os.path.join(self._stopmotion_project_dir, f'frame_{self._stopmotion_frame_count:04d}.jpg')
+            if os.path.exists(path):
+                try:
+                    last_img = Image.open(path).convert('RGB').resize((800, 346), Image.NEAREST)
+                    img = Image.blend(img, last_img, 0.5)
+                except Exception as e:
+                    print(f"Error blending onion skin in mock: {e}")
+                    
+        # Convert to PhotoImage and set it
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        self._mock_photo = tk.PhotoImage(data=buf.getvalue())
+        self._mock_preview_lbl.config(image=self._mock_photo)
 
     # ── Eject (safe) ─────────────────────────────────────────────────────────────
 
@@ -1098,6 +1155,7 @@ class DVRApp:
         dlg.geometry(f'{w}x{h}+{(W-w)//2}+{(H-h)//2}')
         dlg.resizable(False, False)
         dlg.grab_set()
+        dlg.bind('<Escape>', lambda _: dlg.destroy())
         tk.Label(dlg, text=title, bg=C_PANEL, fg=C_DIM, font=F_SMALL).pack(pady=(8, 0))
         return dlg
 
