@@ -200,6 +200,7 @@ class DVRApp:
         self._stopmotion_project_dir = None
         self._stopmotion_frame_count = 0
         self._onion_enabled = False
+        self._onion_alpha = 0.5
         self._loop_previewing = False
         self._loop_images = []
         self._loop_frame_index = 0
@@ -377,6 +378,8 @@ class DVRApp:
 
         # Stopmotion buttons
         self._onion_btn = _btn(self.bot, '🧅', self._toggle_onion_skin, font=F_ICON)
+        self._onion_dec_btn = _btn(self.bot, '-', lambda: self._adjust_onion_alpha(-0.1), font=F_SMALL)
+        self._onion_inc_btn = _btn(self.bot, '+', lambda: self._adjust_onion_alpha(0.1), font=F_SMALL)
         self._loop_btn  = _btn(self.bot, '🔁', self._toggle_loop_preview, font=F_ICON)
         self._compile_btn = _btn(self.bot, '🎬', self._compile_stopmotion_dialog, font=F_ICON)
 
@@ -384,11 +387,19 @@ class DVRApp:
         """Show idle vs recording vs stopmotion controls."""
         rec = self.pipeline.recording
         for b in (self._play_btn, self._grab_btn, self._mark_btn,
-                  self._onion_btn, self._loop_btn, self._compile_btn):
+                  self._onion_btn, self._loop_btn, self._compile_btn,
+                  self._onion_dec_btn, self._onion_inc_btn):
             b.place_forget()
 
         if self._stopmotion_mode:
-            self._onion_btn.place(x=self._slot_x - 8 - 78, y=BY, width=78, height=BH)
+            if self._onion_enabled:
+                self._onion_btn.config(bg=C_BLUE, fg='white', text=f'🧅{int(self._onion_alpha*100)}%', font=F_SMALL)
+                self._onion_btn.place(x=self._slot_x - 8 - 78, y=BY, width=46, height=BH)
+                self._onion_dec_btn.place(x=self._slot_x - 8 - 78 + 50, y=BY, width=14, height=BH)
+                self._onion_inc_btn.place(x=self._slot_x - 8 - 78 + 64, y=BY, width=14, height=BH)
+            else:
+                self._onion_btn.config(bg=C_PANEL2, fg=C_TEXT, text='🧅', font=F_ICON)
+                self._onion_btn.place(x=self._slot_x - 8 - 78, y=BY, width=78, height=BH)
             self._loop_btn.place(x=self._slot_x, y=BY, width=78, height=BH)
             self._compile_btn.place(x=self._slot_x - 8 - 78 - 8 - 78, y=BY, width=78, height=BH)
             self._rec_btn.config(text='📷 CAPT', fg='white', bg=C_GREEN, relief='flat')
@@ -611,7 +622,7 @@ class DVRApp:
                 print(f"Error caching frame for loop: {e}")
 
             if self._onion_enabled:
-                self.pipeline.set_onion_skin(path, 0.5)
+                self.pipeline.set_onion_skin(path, self._onion_alpha)
             self.root.after(0, lambda: self._flash(f'📷 frame {self._stopmotion_frame_count} saved', C_GREEN))
         else:
             self.root.after(0, lambda: self._flash('📷  saved'))
@@ -677,14 +688,20 @@ class DVRApp:
             return
         self._onion_enabled = not self._onion_enabled
         if self._onion_enabled:
-            self._onion_btn.config(bg=C_BLUE, fg='white')
             if self._stopmotion_frame_count > 0 and self._stopmotion_project_dir:
                 path = os.path.join(self._stopmotion_project_dir, f'frame_{self._stopmotion_frame_count:04d}.jpg')
                 if os.path.exists(path):
-                    self.pipeline.set_onion_skin(path, 0.5)
+                    self.pipeline.set_onion_skin(path, self._onion_alpha)
         else:
-            self._onion_btn.config(bg=C_PANEL2, fg=C_TEXT)
             self.pipeline.set_onion_skin(None)
+        self._update_action_row()
+
+    def _adjust_onion_alpha(self, delta):
+        if not self._stopmotion_mode or not self._onion_enabled:
+            return
+        self._onion_alpha = round(max(0.1, min(0.9, self._onion_alpha + delta)), 1)
+        self.pipeline.set_onion_alpha(self._onion_alpha)
+        self._onion_btn.config(text=f'🧅{int(self._onion_alpha * 100)}%')
 
     def _toggle_loop_preview(self):
         if not self._stopmotion_mode:
@@ -741,14 +758,53 @@ class DVRApp:
         if self._stopmotion_frame_count == 0:
             self._flash('No frames to compile', C_AMBER)
             return
-        self._confirm(
-            'Compile Stopmotion',
-            f'Compile {self._stopmotion_frame_count} frames\ninto an MP4 video?',
-            self._do_compile,
-            yes='Compile'
-        )
 
-    def _do_compile(self):
+        selected_fps = tk.IntVar(value=8)
+        dlg = self._dialog('Compile Stopmotion', 340, 240)
+        
+        # Frame count label
+        tk.Label(dlg, text=f'Compile {self._stopmotion_frame_count} frames\ninto an MP4 video.',
+                 bg=C_PANEL, fg=C_TEXT, font=F_UI, justify='center').pack(pady=(12, 10))
+
+        # Framerate Presets
+        fps_frame = tk.Frame(dlg, bg=C_PANEL)
+        fps_frame.pack(pady=10)
+
+        fps_buttons = {}
+
+        def select_fps(fps):
+            selected_fps.set(fps)
+            for f, btn in fps_buttons.items():
+                if f == fps:
+                    btn.config(bg=C_BLUE, fg='white')
+                else:
+                    btn.config(bg=C_PANEL2, fg=C_TEXT)
+
+        for fps in [5, 8, 12, 24]:
+            btn = _btn(fps_frame, f'{fps} FPS', lambda f=fps: select_fps(f), font=F_SMALL)
+            btn.pack(side='left', padx=4, ipadx=6, ipady=4)
+            fps_buttons[fps] = btn
+
+        # Highlight default (8 FPS)
+        select_fps(8)
+
+        # Action row
+        action_row = tk.Frame(dlg, bg=C_PANEL)
+        action_row.pack(pady=(12, 0))
+
+        def on_compile():
+            fps_val = selected_fps.get()
+            dlg.destroy()
+            self._do_compile(fps_val)
+
+        compile_btn = _btn(action_row, 'Compile', on_compile)
+        compile_btn.config(bg=C_RED, fg='white', activebackground=C_REDDK)
+        compile_btn.pack(side='left', padx=10, ipadx=12, ipady=8)
+
+        cancel_btn = _btn(action_row, 'Cancel', dlg.destroy)
+        cancel_btn.pack(side='left', padx=10, ipadx=12, ipady=8)
+
+    def _do_compile(self, fps):
         mp = self.storage.primary_mount
         if not mp:
             self._flash('No USB drive', C_AMBER)
@@ -760,7 +816,7 @@ class DVRApp:
         self.pipeline.compile_stopmotion(
             self._stopmotion_project_dir,
             output_path,
-            fps=8,
+            fps=fps,
             callback=self._on_compile_done
         )
 
@@ -850,7 +906,7 @@ class DVRApp:
             if os.path.exists(path):
                 try:
                     last_img = Image.open(path).convert('RGB').resize((800, 346), Image.NEAREST)
-                    img = Image.blend(img, last_img, 0.5)
+                    img = Image.blend(img, last_img, self._onion_alpha)
                 except Exception as e:
                     print(f"Error blending onion skin in mock: {e}")
                     
@@ -919,7 +975,7 @@ class DVRApp:
 
     def _play_clip(self):
         clip = self._selected_clip()
-        if not clip or not os.path.exists(clip['path']):
+        if not clip or not os.path.exists(clip['path']) or os.path.isdir(clip['path']):
             return
         subprocess.Popen(['mpv', '--fullscreen', '--no-terminal', '--osd-level=1',
                           '--hwdec=v4l2m2m', clip['path']])
@@ -933,7 +989,11 @@ class DVRApp:
 
     def _do_delete(self, clip):
         try:
-            os.remove(clip['path'])
+            if os.path.isdir(clip['path']):
+                import shutil
+                shutil.rmtree(clip['path'])
+            else:
+                os.remove(clip['path'])
         except OSError:
             pass
         self._refresh_clips()

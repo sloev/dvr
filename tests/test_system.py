@@ -87,5 +87,50 @@ class TestSystem(unittest.TestCase):
         mock_run.side_effect = Exception("timedatectl error")
         self.assertFalse(system.is_ntp_synced())
 
+    @patch('os.path.isdir')
+    @patch('os.listdir')
+    @patch('os.path.isfile')
+    @patch('os.path.getsize')
+    @patch('os.stat')
+    def test_list_clips(self, mock_stat, mock_getsize, mock_isfile, mock_listdir, mock_isdir):
+        def isdir_side_effect(path):
+            return path in ["/dir", "/dir/stopmotion", "/dir/stopmotion/proj_1"]
+            
+        def listdir_side_effect(path):
+            if path == "/dir":
+                return ["clip1.mp4", "stopmotion", "ignored.txt"]
+            elif path == "/dir/stopmotion":
+                return ["proj_1", "ignored_dir"]
+            elif path == "/dir/stopmotion/proj_1":
+                return ["frame_0001.jpg", "frame_0002.jpg"]
+            return []
+
+        def isfile_side_effect(path):
+            return path in ["/dir/clip1.mp4", "/dir/stopmotion/proj_1/frame_0001.jpg", "/dir/stopmotion/proj_1/frame_0002.jpg"]
+
+        mock_isdir.side_effect = isdir_side_effect
+        mock_listdir.side_effect = listdir_side_effect
+        mock_isfile.side_effect = isfile_side_effect
+        mock_getsize.side_effect = lambda path: 1000000 if "frame_0001" in path else 2000000
+        
+        mock_stat_obj = MagicMock()
+        mock_stat_obj.st_size = 5000000
+        mock_stat_obj.st_mtime = 1234567.0
+        mock_stat.return_value = mock_stat_obj
+
+        clips = system.list_clips("/dir")
+        self.assertEqual(len(clips), 2)
+        
+        # Check first clip (clip1.mp4)
+        self.assertEqual(clips[0]["name"], "clip1.mp4")
+        self.assertEqual(clips[0]["size_mb"], 5.0)
+        self.assertEqual(clips[0]["path"], "/dir/clip1.mp4")
+        
+        # Check second clip (proj_1)
+        self.assertEqual(clips[1]["name"], "proj_1")
+        self.assertEqual(clips[1]["size_mb"], 3.0) # 1MB + 2MB
+        self.assertEqual(clips[1]["path"], "/dir/stopmotion/proj_1")
+
 if __name__ == '__main__':
     unittest.main()
+

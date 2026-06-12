@@ -80,25 +80,47 @@ def remount_boot_ro():
 
 
 def list_clips(directory: str) -> list:
-    """Return sorted list of .mp4 clip dicts in directory."""
+    """Return sorted list of .mp4 clip dicts and stopmotion projects in directory."""
     clips = []
     if not directory or not os.path.isdir(directory):
         return clips
-    for name in sorted(os.listdir(directory)):
-        if not name.lower().endswith(".mp4"):
-            continue
-        path = os.path.join(directory, name)
-        try:
-            stat  = os.stat(path)
-            clips.append({
-                "name":    name,
-                "path":    path,
-                "size_mb": stat.st_size / 1e6,
-                "mtime":   stat.st_mtime,
-            })
-        except OSError:
-            pass
-    return clips
+    for name in os.listdir(directory):
+        if name.lower().endswith(".mp4"):
+            path = os.path.join(directory, name)
+            try:
+                stat  = os.stat(path)
+                clips.append({
+                    "name":    name,
+                    "path":    path,
+                    "size_mb": stat.st_size / 1e6,
+                    "mtime":   stat.st_mtime,
+                })
+            except OSError:
+                pass
+
+    stopmotion_dir = os.path.join(directory, 'stopmotion')
+    if os.path.isdir(stopmotion_dir):
+        for name in os.listdir(stopmotion_dir):
+            if name.startswith("proj_"):
+                path = os.path.join(stopmotion_dir, name)
+                if os.path.isdir(path):
+                    try:
+                        total_size = 0
+                        for f in os.listdir(path):
+                            fpath = os.path.join(path, f)
+                            if os.path.isfile(fpath):
+                                total_size += os.path.getsize(fpath)
+                        stat = os.stat(path)
+                        clips.append({
+                            "name":    name,
+                            "path":    path,
+                            "size_mb": total_size / 1e6,
+                            "mtime":   stat.st_mtime,
+                        })
+                    except OSError:
+                        pass
+    return sorted(clips, key=lambda x: x['name'])
+
 
 
 def format_duration(seconds: float) -> str:
