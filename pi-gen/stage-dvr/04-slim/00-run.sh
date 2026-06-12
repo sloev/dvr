@@ -58,7 +58,7 @@ for keep in \
     weston xwayland \
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-x gstreamer1.0-alsa \
-    python3 python3-gi python3-tk python3-psutil \
+    python3 python3-gi python3-tk python3-psutil python3-pil \
     fonts-dejavu-core \
     systemd udev overlayroot ; do
     if ! dpkg -s "$keep" >/dev/null 2>&1; then

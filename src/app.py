@@ -27,6 +27,8 @@ import subprocess
 from datetime import datetime
 
 import tkinter as tk
+import io
+from PIL import Image
 
 import system
 
@@ -188,6 +190,15 @@ class DVRApp:
         self._markers_path = None
         self._overlay     = None
 
+        # Stopmotion state
+        self._stopmotion_mode = False
+        self._stopmotion_project_dir = None
+        self._stopmotion_frame_count = 0
+        self._onion_enabled = False
+        self._loop_previewing = False
+        self._loop_images = []
+        self._loop_frame_index = 0
+
         # meter state
         self._meter_mode = 'PPM'
         self._lvl_peak   = [Meter.DB_MIN, Meter.DB_MIN]
@@ -304,9 +315,16 @@ class DVRApp:
         tk.Label(self.top, text='CI-TEST', bg='#ffffff', fg='#000000',
                  font=F_SMALL, padx=4).pack(side='left', padx=10)
 
-        self._tc_lbl = tk.Label(self.top, text='00:00:00:00',
+        tc_frame = tk.Frame(self.top, bg=C_PANEL)
+        tc_frame.place(relx=0.5, rely=0.5, anchor='center')
+
+        self._tc_lbl = tk.Label(tc_frame, text='00:00:00:00',
                                 bg=C_PANEL, fg=C_TEXT, font=F_MONO_L)
-        self._tc_lbl.place(relx=0.5, rely=0.5, anchor='center')
+        self._tc_lbl.pack(side='left')
+
+        self._ntp_lbl = tk.Label(tc_frame, text='🕒',
+                                 bg=C_PANEL, fg=C_DIM, font=F_SMALL)
+        self._ntp_lbl.pack(side='left', padx=(6, 0))
 
         self._temp_lbl = tk.Label(self.top, text='--°C',
                                   bg=C_PANEL, fg=C_DIM, font=F_SMALL)
@@ -333,7 +351,7 @@ class DVRApp:
         self._rec_btn = tk.Button(
             self.bot, text='●  REC', font=('DejaVu Sans', 18, 'bold'),
             bg=C_PANEL, fg=C_RED, activebackground=C_REDDK, activeforeground=C_RED,
-            relief='solid', bd=2, cursor='hand2', command=self._toggle_record)
+            relief='solid', bd=2, cursor='hand2', command=self._on_action_rec)
         self._rec_btn.place(x=W - 8 - 140, y=BY, width=140, height=BH)
 
         # eject (always present, left of REC)
@@ -348,12 +366,24 @@ class DVRApp:
         self._slot_x  = slot_x
         self._mark_x  = slot_x - 8 - 78
 
+        # Stopmotion buttons
+        self._onion_btn = _btn(self.bot, '🧅', self._toggle_onion_skin, font=F_ICON)
+        self._loop_btn  = _btn(self.bot, '🔁', self._toggle_loop_preview, font=F_ICON)
+        self._compile_btn = _btn(self.bot, '🎬', self._compile_stopmotion_dialog, font=F_ICON)
+
     def _update_action_row(self):
-        """Show idle vs recording controls."""
+        """Show idle vs recording vs stopmotion controls."""
         rec = self.pipeline.recording
-        for b in (self._play_btn, self._grab_btn, self._mark_btn):
+        for b in (self._play_btn, self._grab_btn, self._mark_btn,
+                  self._onion_btn, self._loop_btn, self._compile_btn):
             b.place_forget()
-        if rec:
+
+        if self._stopmotion_mode:
+            self._onion_btn.place(x=self._slot_x - 8 - 78, y=BY, width=78, height=BH)
+            self._loop_btn.place(x=self._slot_x, y=BY, width=78, height=BH)
+            self._compile_btn.place(x=self._slot_x - 8 - 78 - 8 - 78, y=BY, width=78, height=BH)
+            self._rec_btn.config(text='📷 CAPT', fg='white', bg=C_GREEN, relief='flat')
+        elif rec:
             self._grab_btn.place(x=self._slot_x, y=BY, width=78, height=BH)
             self._mark_btn.place(x=self._mark_x, y=BY, width=78, height=BH)
             self._rec_btn.config(text='■ STOP', fg='white', bg=C_RED, relief='flat')
@@ -381,10 +411,11 @@ class DVRApp:
 
         grid = tk.Frame(self.menu, bg=C_BG)
         grid.pack(fill='both', expand=True, padx=14, pady=8)
-        tiles = (('📶', 'Wi-Fi',    self._menu_wifi),
-                 ('⚙',  'Settings', self._menu_settings),
-                 ('ℹ',  'Info',     self._show_info),
-                 ('⏻',  'Power',    self._menu_power))
+        tiles = (('📶', 'Wi-Fi',      self._menu_wifi),
+                 ('🎬', 'Stopmotion', self._menu_stopmotion),
+                 ('⚙',  'Settings',   self._menu_settings),
+                 ('ℹ',  'Info',       self._show_info),
+                 ('⏻',  'Power',      self._menu_power))
         for idx, (icon, label, cmd) in enumerate(tiles):
             r, col = divmod(idx, 2)
             t = tk.Button(grid, text=f'{icon}\n{label}', command=cmd,
@@ -392,8 +423,9 @@ class DVRApp:
                           activeforeground='white', relief='flat', bd=0,
                           cursor='hand2', font=F_TILE, justify='center')
             t.grid(row=r, column=col, sticky='nsew', padx=8, pady=8)
-        for i in range(2):
+        for i in range(3):
             grid.rowconfigure(i, weight=1)
+        for i in range(2):
             grid.columnconfigure(i, weight=1)
 
     def _open_menu(self):
@@ -501,6 +533,14 @@ class DVRApp:
         self._tc_lbl.config(text=now.strftime('%H:%M:%S') + f':{ff:02d}')
         self._temp_lbl.config(text=f'{system.cpu_temp():.0f}°C')
 
+        if not hasattr(self, '_ntp_tick_cnt'):
+            self._ntp_tick_cnt = 24
+        self._ntp_tick_cnt += 1
+        if self._ntp_tick_cnt >= 25:
+            self._ntp_tick_cnt = 0
+            synced = system.is_ntp_synced()
+            self._ntp_lbl.config(fg=C_GREEN if synced else C_DIM)
+
         if self.pipeline.recording:
             self._rec_btn.config(text=f'■ {system.format_duration(self.pipeline.rec_elapsed)}')
         self.root.after(200, self._tick)
@@ -544,7 +584,24 @@ class DVRApp:
             self._set_rec_border(False)
 
     def _on_still_saved(self, path):
-        self.root.after(0, lambda: self._flash('📷  saved'))
+        if self._stopmotion_mode and self._stopmotion_project_dir:
+            try:
+                img = Image.open(path)
+                img = img.resize((800, 346), Image.NEAREST)
+                buf = io.BytesIO()
+                img.save(buf, format='PNG')
+                photo = tk.PhotoImage(data=buf.getvalue())
+                self._loop_images.append(photo)
+                if len(self._loop_images) > 40:
+                    self._loop_images.pop(0)
+            except Exception as e:
+                print(f"Error caching frame for loop: {e}")
+
+            if self._onion_enabled:
+                self.pipeline.set_onion_skin(path, 0.5)
+            self.root.after(0, lambda: self._flash(f'📷 frame {self._stopmotion_frame_count} saved', C_GREEN))
+        else:
+            self.root.after(0, lambda: self._flash('📷  saved'))
 
     # ── Recording ────────────────────────────────────────────────────────────────
 
@@ -583,6 +640,168 @@ class DVRApp:
             pass
         path = os.path.join(stills, datetime.now().strftime('grab_%Y%m%d_%H%M%S.jpg'))
         self.pipeline.grab_still(path)
+
+    # ── Stopmotion ───────────────────────────────────────────────────────────────
+
+    def _on_action_rec(self):
+        if self._stopmotion_mode:
+            self._capture_frame()
+        else:
+            self._toggle_record()
+
+    def _capture_frame(self):
+        if not self._stopmotion_project_dir:
+            self._flash('No stopmotion project', C_AMBER)
+            return
+        if self._loop_previewing:
+            self._toggle_loop_preview()
+        self._stopmotion_frame_count += 1
+        path = os.path.join(self._stopmotion_project_dir, f'frame_{self._stopmotion_frame_count:04d}.jpg')
+        self.pipeline.grab_still(path)
+
+    def _toggle_onion_skin(self):
+        if not self._stopmotion_mode:
+            return
+        self._onion_enabled = not self._onion_enabled
+        if self._onion_enabled:
+            self._onion_btn.config(bg=C_BLUE, fg='white')
+            if self._stopmotion_frame_count > 0 and self._stopmotion_project_dir:
+                path = os.path.join(self._stopmotion_project_dir, f'frame_{self._stopmotion_frame_count:04d}.jpg')
+                if os.path.exists(path):
+                    self.pipeline.set_onion_skin(path, 0.5)
+        else:
+            self._onion_btn.config(bg=C_PANEL2, fg=C_TEXT)
+            self.pipeline.set_onion_skin(None)
+
+    def _toggle_loop_preview(self):
+        if not self._stopmotion_mode:
+            return
+        self._loop_previewing = not self._loop_previewing
+        if self._loop_previewing:
+            if self._onion_enabled:
+                self._toggle_onion_skin()
+            self._loop_btn.config(bg=C_BLUE, fg='white')
+            self._loop_lbl = tk.Label(self.root, bg='black')
+            self._loop_lbl.place(x=0, y=TOP_H, width=W, height=H - TOP_H - BOT_H)
+            self._loop_lbl.lift()
+
+            if not self._loop_images and self._stopmotion_project_dir:
+                import glob
+                frames = sorted(glob.glob(os.path.join(self._stopmotion_project_dir, 'frame_*.jpg')))
+                frames = frames[-40:]
+                for f in frames:
+                    try:
+                        img = Image.open(f)
+                        img = img.resize((800, 346), Image.NEAREST)
+                        buf = io.BytesIO()
+                        img.save(buf, format='PNG')
+                        photo = tk.PhotoImage(data=buf.getvalue())
+                        self._loop_images.append(photo)
+                    except Exception as e:
+                        print(f"Error loading frame for loop: {e}")
+
+            self._loop_frame_index = -1
+            self._animate_loop()
+        else:
+            self._loop_btn.config(bg=C_PANEL2, fg=C_TEXT)
+            if hasattr(self, '_loop_lbl') and self._loop_lbl:
+                self._loop_lbl.place_forget()
+                self._loop_lbl.destroy()
+                self._loop_lbl = None
+
+    def _animate_loop(self):
+        if not self._loop_previewing:
+            return
+        if not self._loop_images:
+            self._flash('No frames captured yet', C_AMBER)
+            self._toggle_loop_preview()
+            return
+        self._loop_frame_index = (self._loop_frame_index + 1) % len(self._loop_images)
+        img = self._loop_images[self._loop_frame_index]
+        self._loop_lbl.config(image=img)
+        self._loop_lbl.image = img
+        self.root.after(125, self._animate_loop)
+
+    def _compile_stopmotion_dialog(self):
+        if not self._stopmotion_mode or not self._stopmotion_project_dir:
+            return
+        if self._stopmotion_frame_count == 0:
+            self._flash('No frames to compile', C_AMBER)
+            return
+        self._confirm(
+            'Compile Stopmotion',
+            f'Compile {self._stopmotion_frame_count} frames\ninto an MP4 video?',
+            self._do_compile,
+            yes='Compile'
+        )
+
+    def _do_compile(self):
+        mp = self.storage.primary_mount
+        if not mp:
+            self._flash('No USB drive', C_AMBER)
+            return
+        self._show_overlay('Compiling…', C_AMBER)
+        now = datetime.now()
+        out_name = now.strftime('stopmotion_%Y%m%d_%H%M%S.mp4')
+        output_path = os.path.join(mp, out_name)
+        self.pipeline.compile_stopmotion(
+            self._stopmotion_project_dir,
+            output_path,
+            fps=8,
+            callback=self._on_compile_done
+        )
+
+    def _on_compile_done(self, success, err_msg):
+        self._hide_overlay()
+        if success:
+            self.root.after(0, lambda: self._flash('🎬 stopmotion compiled successfully!', C_GREEN))
+            self.root.after(0, self._refresh_clips)
+        else:
+            self.root.after(0, lambda: self._flash(f'Compilation failed: {err_msg}', C_RED))
+
+    def _toggle_stopmotion_mode(self):
+        if self.pipeline.recording:
+            self._flash('Cannot enter stopmotion while recording', C_AMBER)
+            return
+        self._stopmotion_mode = not self._stopmotion_mode
+        if self._stopmotion_mode:
+            mp = self.storage.primary_mount
+            if not mp:
+                self._flash('No USB drive', C_AMBER)
+                self._stopmotion_mode = False
+                return
+            now = datetime.now()
+            proj_name = now.strftime('proj_%Y%m%d_%H%M%S')
+            self._stopmotion_project_dir = os.path.join(mp, 'stopmotion', proj_name)
+            try:
+                os.makedirs(self._stopmotion_project_dir, exist_ok=True)
+            except OSError:
+                self._flash('Failed to create project dir', C_RED)
+                self._stopmotion_mode = False
+                return
+            self._stopmotion_frame_count = 0
+            self._onion_enabled = False
+            self._loop_previewing = False
+            self._loop_images = []
+            self._loop_frame_index = 0
+            self._onion_btn.config(bg=C_PANEL2, fg=C_TEXT)
+            self._loop_btn.config(bg=C_PANEL2, fg=C_TEXT)
+            self._flash('🎬 Stopmotion Mode active', C_GREEN)
+        else:
+            if self._loop_previewing:
+                self._toggle_loop_preview()
+            if self._onion_enabled:
+                self._toggle_onion_skin()
+            self.pipeline.set_onion_skin(None)
+            self._stopmotion_project_dir = None
+            self._stopmotion_frame_count = 0
+            self._loop_images = []
+            self._flash('Stopmotion Mode disabled')
+        self._update_action_row()
+
+    def _menu_stopmotion(self):
+        self._close_menu()
+        self._toggle_stopmotion_mode()
 
     # ── Eject (safe) ─────────────────────────────────────────────────────────────
 

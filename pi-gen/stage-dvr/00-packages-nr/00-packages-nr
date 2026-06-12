@@ -10,6 +10,7 @@ gir1.2-gst-plugins-base-1.0
 v4l-utils
 python3-tk
 python3-psutil
+python3-pil
 alsa-utils
 network-manager
 udisks2

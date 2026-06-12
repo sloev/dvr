@@ -87,6 +87,7 @@ class Pipeline:
             f"v4l2src device={VIDEO_DEVICE} name=vsrc ! "
             f"video/x-raw,format={PIXEL_FORMAT},width={self.width},height={self.height},"
             f"framerate={self.fps} ! "
+            "compositor name=comp ! "
             "tee name=vtee allow-not-linked=true "
             # Preview: let Xv handle UYVY + scaling on the GPU (zero CPU convert).
             # If the preview is black, your Xv adaptor lacks UYVY — insert
@@ -415,3 +416,116 @@ class Pipeline:
                 # turns these into PPM/VU ballistics and a clip indicator.
                 self.on_level(float(peak[0]), float(peak[1]),
                               float(rms[0]),  float(rms[1]))
+
+    def set_onion_skin(self, path: str, alpha: float = 0.5):
+        """Enable or update the onion skin overlay image."""
+        with self._lock:
+            if not self._pipeline:
+                return
+            comp = self._pipeline.get_by_name("comp")
+            if not comp:
+                return
+
+            self._remove_onion_skin()
+
+            if not path or not os.path.exists(path):
+                return
+
+            try:
+                filesrc = Gst.ElementFactory.make("filesrc", "onionsrc")
+                filesrc.set_property("location", path)
+                jpegdec = Gst.ElementFactory.make("jpegdec", "oniondec")
+                videoconvert = Gst.ElementFactory.make("videoconvert", "onionconvert")
+                imagefreeze = Gst.ElementFactory.make("imagefreeze", "onionfreeze")
+
+                self._onion_bin = Gst.Bin.new("onionbin")
+                self._onion_bin.add(filesrc)
+                self._onion_bin.add(jpegdec)
+                self._onion_bin.add(videoconvert)
+                self._onion_bin.add(imagefreeze)
+
+                filesrc.link(jpegdec)
+                jpegdec.link(videoconvert)
+                videoconvert.link(imagefreeze)
+
+                ghost = Gst.GhostPad.new("src", imagefreeze.get_static_pad("src"))
+                self._onion_bin.add_pad(ghost)
+
+                self._pipeline.add(self._onion_bin)
+
+                self._onion_pad = comp.get_request_pad("sink_%u")
+                self._onion_pad.set_property("alpha", alpha)
+                self._onion_pad.set_property("xpos", 0)
+                self._onion_pad.set_property("ypos", 0)
+
+                ghost.link(self._onion_pad)
+
+                self._onion_bin.sync_state_with_parent()
+            except Exception as e:
+                print(f"[pipeline] set_onion_skin error: {e}")
+
+    def set_onion_alpha(self, alpha: float):
+        """Update onion skin alpha dynamically."""
+        with self._lock:
+            if hasattr(self, '_onion_pad') and self._onion_pad:
+                self._onion_pad.set_property("alpha", alpha)
+
+    def _remove_onion_skin(self):
+        if hasattr(self, '_onion_bin') and self._onion_bin:
+            self._onion_bin.set_state(Gst.State.NULL)
+            if hasattr(self, '_onion_pad') and self._onion_pad:
+                try:
+                    self._onion_pad.get_peer().unlink(self._onion_pad)
+                except Exception:
+                    pass
+                comp = self._pipeline.get_by_name("comp")
+                if comp:
+                    comp.release_request_pad(self._onion_pad)
+                self._onion_pad = None
+            self._pipeline.remove(self._onion_bin)
+            self._onion_bin = None
+
+    def compile_stopmotion(self, folder: str, output_path: str, fps: int = 8, callback=None):
+        """Compile frame_*.jpg images in folder into an MP4 video."""
+        def _compile():
+            import glob
+            frames = sorted(glob.glob(os.path.join(folder, "frame_*.jpg")))
+            if not frames:
+                if callback:
+                    callback(False, "No frames found in project")
+                return
+
+            pattern = os.path.join(folder, "frame_%04d.jpg")
+            is_preview = os.environ.get("DVR_UI_PREVIEW") == "1"
+            encoder = "x264enc" if is_preview else "v4l2h264enc"
+
+            desc = (
+                f"multifilesrc location=\"{pattern}\" index=1 caps=\"image/jpeg,framerate={fps}/1\" ! "
+                "jpegdec ! videoconvert ! "
+                f"{encoder} ! h264parse ! mp4mux ! filesink location=\"{output_path}\""
+            )
+            try:
+                pipeline = Gst.parse_launch(desc)
+                pipeline.set_state(Gst.State.PLAYING)
+
+                bus = pipeline.get_bus()
+                msg = bus.timed_pop_filtered(
+                    Gst.CLOCK_TIME_NONE,
+                    Gst.MessageType.EOS | Gst.MessageType.ERROR
+                )
+
+                success = True
+                err_msg = ""
+                if msg and msg.type == Gst.MessageType.ERROR:
+                    success = False
+                    err, debug = msg.parse_error()
+                    err_msg = str(err)
+
+                pipeline.set_state(Gst.State.NULL)
+                if callback:
+                    callback(success, err_msg)
+            except Exception as e:
+                if callback:
+                    callback(False, str(e))
+
+        threading.Thread(target=_compile, daemon=True).start()

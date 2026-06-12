@@ -73,5 +73,19 @@ class TestSystem(unittest.TestCase):
         self.assertEqual(system.format_size(1000000), "1 MB")
         self.assertEqual(system.format_size(1000000000), "1.0 GB")
 
+    @patch('subprocess.run')
+    def test_is_ntp_synced(self, mock_run):
+        # Synced case
+        mock_run.return_value = MagicMock(stdout="NTPSynchronized=yes\n", returncode=0)
+        self.assertTrue(system.is_ntp_synced())
+        
+        # Unsynced case
+        mock_run.return_value = MagicMock(stdout="NTPSynchronized=no\n", returncode=0)
+        self.assertFalse(system.is_ntp_synced())
+
+        # Error case
+        mock_run.side_effect = Exception("timedatectl error")
+        self.assertFalse(system.is_ntp_synced())
+
 if __name__ == '__main__':
     unittest.main()

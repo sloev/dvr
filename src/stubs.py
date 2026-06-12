@@ -69,6 +69,25 @@ class FakePipeline:
             self.on_still_saved(path)
         return True
 
+    def set_onion_skin(self, path, alpha=0.5):
+        pass
+
+    def set_onion_alpha(self, alpha):
+        pass
+
+    def compile_stopmotion(self, folder, output_path, fps=8, callback=None):
+        def _fake():
+            time.sleep(1.5)
+            try:
+                with open(output_path, "wb") as f:
+                    f.write(b"\0" * 1024)
+                if callback:
+                    callback(True, "")
+            except Exception as e:
+                if callback:
+                    callback(False, str(e))
+        threading.Thread(target=_fake, daemon=True).start()
+
     # animated fake meters: music-ish peaks with the odd transient
     def _levels(self):
         t = 0.0

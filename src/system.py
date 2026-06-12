@@ -116,3 +116,14 @@ def format_size(bytes_: int) -> str:
     if bytes_ >= 1e6:
         return f"{bytes_/1e6:.0f} MB"
     return f"{bytes_/1e3:.0f} KB"
+
+
+def is_ntp_synced() -> bool:
+    try:
+        r = subprocess.run(
+            ["timedatectl", "show", "--property=NTPSynchronized"],
+            capture_output=True, text=True, timeout=2
+        )
+        return "yes" in r.stdout.lower()
+    except Exception:
+        return False

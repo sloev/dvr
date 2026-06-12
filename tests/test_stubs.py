@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import shutil
+import threading
 
 # Add src to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
@@ -66,6 +67,25 @@ class TestStubs(unittest.TestCase):
         w.scan(callback=on_scan)
         time.sleep(0.7)
         self.assertTrue(scan_called[0])
+
+    def test_fake_pipeline_stopmotion(self):
+        p = stubs.FakePipeline()
+        p.set_onion_skin("/tmp/nonexistent.jpg", 0.5)
+        p.set_onion_alpha(0.3)
+        
+        callback_called = threading.Event()
+        def callback(success, err):
+            self.assertTrue(success)
+            self.assertEqual(err, "")
+            callback_called.set()
+            
+        p.compile_stopmotion("/tmp", "/tmp/test_compile.mp4", fps=8, callback=callback)
+        self.assertTrue(callback_called.wait(3.0))
+        self.assertTrue(os.path.exists("/tmp/test_compile.mp4"))
+        try:
+            os.remove("/tmp/test_compile.mp4")
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     unittest.main()
