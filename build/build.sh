@@ -45,6 +45,7 @@ echo "==> Running chroot provisioning via systemd-nspawn..."
 systemd-nspawn --quiet -D mnt --bind-ro="$(pwd)":/repo /bin/bash /repo/build/chroot.sh
 
 echo "==> Unmounting..."
+sync
 umount mnt/boot/firmware
 umount mnt
 losetup -d "$LOOP_DEV"
