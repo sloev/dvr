@@ -3,11 +3,6 @@ name: Build DVR image
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'pi-gen/**'
-      - 'setup/**'
-      - 'systemd/**'
-      - '.github/workflows/build-image.yml'
   workflow_dispatch:
 
 env:
@@ -19,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write        # needed to publish the rolling release
+  contents: write
 
 jobs:
   preview:
@@ -45,79 +40,15 @@ jobs:
   build:
     needs: preview
     runs-on: ubuntu-22.04
-    timeout-minutes: 150
-    env:
-      ACNG_DIR: /var/cache/apt-cacher-ng
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space and relocate Docker to the large volume
+      - name: Free disk space
         run: |
-          # pi-gen images are big; the runner's / is small. Reclaim space and
-          # point Docker's data-root at /mnt (~70 GB free on hosted runners).
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-                      /opt/hostedtoolcache /usr/local/share/boost || true
-          sudo systemctl stop docker
-          sudo mkdir -p /mnt/docker
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl start docker
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache || true
           df -h /
-
-      - name: Install qemu-user-static + apt-cacher-ng
-        run: |
-          sudo apt-get update
-          # qemu: pi-gen self-registers binfmt (F-flag) using the host binary.
-          # apt-cacher-ng: caches every .deb pi-gen downloads, across runs.
-          sudo apt-get install -y qemu-user-static binfmt-support apt-cacher-ng
-
-      # ── CACHE 1: persistent apt package cache (the big win) ─────────────────
-      # Keyed by run_id so each run saves a fresh, growing cache; restore-keys
-      # pulls the most recent. GitHub LRU-evicts old entries (10 GB/repo).
-      - name: Prepare cache directory permissions
-        run: sudo mkdir -p ${{ env.ACNG_DIR }} && sudo chown -R runner:runner ${{ env.ACNG_DIR }}
-
-      - name: Restore apt-cacher-ng cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.ACNG_DIR }}
-          key: apt-cacher-ng-${{ github.run_id }}
-          restore-keys: |
-            apt-cacher-ng-
-
-      - name: Start apt-cacher-ng with the restored cache
-        run: |
-          sudo chown -R apt-cacher-ng:apt-cacher-ng "$ACNG_DIR" || true
-          sudo sed -i 's/^# *PassThroughPattern:.*/PassThroughPattern: .*/' \
-            /etc/apt-cacher-ng/acng.conf || true
-          sudo systemctl restart apt-cacher-ng
-          # Reachable from inside the pi-gen container via the docker gateway.
-          for i in $(seq 1 10); do
-            curl -sf http://127.0.0.1:3142/acng-report.html >/dev/null && break
-            sleep 1
-          done
-
-      - name: Compute rolling version
-        id: ver
-        run: |
-          echo "version=$(date -u +%Y.%m.%d).${{ github.run_number }}+$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Configure build (password + apt proxy)
-        run: |
-          if [ -n "${{ secrets.DVR_USER_PASS }}" ]; then
-            sed -i "s|^FIRST_USER_PASS=.*|FIRST_USER_PASS='${{ secrets.DVR_USER_PASS }}'|" pi-gen/config
-          fi
-          # Route all pi-gen apt traffic through the host cache.
-          echo "APT_PROXY=http://172.17.0.1:3142" >> pi-gen/config
-          # Enable multi-core compiling and faster compression
-          echo "COMPRESSION_LEVEL=3" >> pi-gen/config
-          echo "XZ_OPT=-T0" >> pi-gen/config
-
-      - name: Build image (pi-gen, Docker)
-        working-directory: pi-gen
-        env:
-          DOCKER_BUILDKIT: '1'
-        run: ./build.sh
 
       - name: Download preview artifacts
         uses: actions/download-artifact@v4
@@ -125,45 +56,33 @@ jobs:
           name: ui-previews
           path: previews
 
+      - name: Build custom image (Mutation buildchain)
+        run: |
+          sudo bash build/build.sh
+        
       - name: Collect artifacts
         id: collect
         run: |
           set -e
-          DEPLOY="pi-gen/pi-gen-src/deploy"
-          IMG=$(ls "$DEPLOY"/*.img.xz | head -n1)
-          VER="${{ steps.ver.outputs.version }}"
-          OUT="dvr-${VER}-armhf.img.xz"
+          OUT="dvr-latest-armhf.img.xz"
           mkdir -p out
-          cp "$IMG" "out/${OUT}"
+          cp "$OUT" "out/${OUT}"
           ( cd out && sha256sum "${OUT}" > "${OUT}.sha256" )
-          # Also copy previews for release attachment
-          cp previews/*.png out/
+          cp previews/*.png out/ 2>/dev/null || true
           ls -lh out
           echo "name=${OUT}" >> "$GITHUB_OUTPUT"
 
       - name: Publish rolling release
-        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Recreate the 'rolling' release so its tag tracks the latest commit.
-          gh release delete rolling --yes --cleanup-tag 2>/dev/null || true
+          gh release delete rolling -y || true
+          git push --delete origin refs/tags/rolling || true
           gh release create rolling \
-            --title "DVR rolling ${{ steps.ver.outputs.version }}" \
-            --notes "Automated image build from \`${{ github.sha }}\` (${{ steps.ver.outputs.version }}).
-
-          Flash with Raspberry Pi Imager → *Use custom image*, or:
-          \`xzcat dvr-*.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync\`
-
-          Verify: \`sha256sum -c dvr-*.img.xz.sha256\`" \
-            --latest \
+            --title "Rolling Build" \
+            --notes "Automated continuous build from master branch. Flash with Raspberry Pi Imager." \
+            --prerelease \
             out/${{ steps.collect.outputs.name }} \
             out/${{ steps.collect.outputs.name }}.sha256 \
             out/*.png
-
-      # Make the cache dir readable by the runner so the post-step cache save
-      # can archive it (apt-cacher-ng owns it otherwise). Runs even on failure
-      # so partial downloads are still cached.
-      - name: Prepare cache for save
-        if: always()
-        run: sudo chmod -R a+rX "$ACNG_DIR" || true
