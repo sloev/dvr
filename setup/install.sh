@@ -82,6 +82,15 @@ systemctl disable --now lightdm 2>/dev/null || true
 # Mask wait-online services to significantly speed up boot
 systemctl mask NetworkManager-wait-online.service 2>/dev/null || true
 systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
+# Mask heavy blockers for faster boot
+systemctl mask keyboard-setup.service 2>/dev/null || true
+systemctl mask rsyslog.service 2>/dev/null || true
+systemctl mask apt-daily.timer 2>/dev/null || true
+systemctl mask apt-daily-upgrade.timer 2>/dev/null || true
+systemctl mask dphys-swapfile.service 2>/dev/null || true
+
+echo "=== DVR install: disabling /boot auto-mount in fstab ==="
+sed -i 's|.*/boot.*vfat.*|#&|' /etc/fstab
 
 echo "=== DVR install: configuring autologin on tty1 ==="
 mkdir -p /etc/systemd/system/getty@tty1.service.d
@@ -94,6 +103,16 @@ EOF
 echo "=== DVR install: creating app directory ==="
 mkdir -p "$INSTALL_DIR"
 cp -r "$SRC_DIR"/* "$INSTALL_DIR/"
+
+# Precompile python to avoid pycache generation on every boot
+echo "=== DVR install: precompiling python bytecode ==="
+python3 -m compileall -q "$INSTALL_DIR"
+
+# Bake GStreamer registry
+echo "=== DVR install: baking GStreamer registry cache ==="
+mkdir -p "$INSTALL_DIR/.cache/gstreamer-1.0"
+GST_REGISTRY_1_0="$INSTALL_DIR/.cache/gstreamer-1.0/registry.bin" gst-inspect-1.0 >/dev/null
+
 chown -R pi:pi "$INSTALL_DIR"
 
 echo "=== DVR install: ALSA config ==="
@@ -144,6 +163,8 @@ cat > /opt/dvr/start.sh <<'EOF'
     done
 ) &
 
+export GST_REGISTRY_1_0=/opt/dvr/.cache/gstreamer-1.0/registry.bin
+export GST_REGISTRY_UPDATE=no
 exec python3 /opt/dvr/main.py
 EOF
 chmod +x /opt/dvr/start.sh

@@ -98,8 +98,15 @@ PYEOF
     v4l2-ctl --device="$DEVICE" --set-edid=file=/tmp/tc358743-1080p25.edid --fix-edid-checksums
 fi
 
-# Wait a moment for source to re-read EDID and send signal
-sleep 2
+# Wait for source to re-read EDID and send signal
+echo "tc358743: polling for signal timings..."
+for i in {1..15}; do
+    if v4l2-ctl --device="$DEVICE" --query-dv-timings 2>/dev/null; then
+        echo "tc358743: signal detected!"
+        break
+    fi
+    sleep 0.2
+done
 
 # Set capture format: 1920x1080 UYVY @ 25fps (change framerate= for NTSC 30fps)
 v4l2-ctl --device="$DEVICE" \

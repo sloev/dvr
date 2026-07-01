@@ -42,6 +42,14 @@ disable_splash=1
 # CPU governor — on-demand by default; change to performance if encoding lags
 arm_freq_min=600
 
+# Fast Boot Optimizations
+initial_turbo=30
+boot_delay=0
+dtoverlay=disable-bt
+dtoverlay=disable-wifi
+dtparam=audio=off
+hdmi_ignore_hotplug=1
+
 # ── Pi 4 specific ─────────────────────────────────────────────────────────────
 [pi4]
 # Enable DRM VC4 V3D driver for Pi4

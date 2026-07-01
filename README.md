@@ -23,11 +23,16 @@ button. Plug in a tape deck, hit record, pull the power when you're done.
 
 ### Interface
 
-![Idle](https://github.com/sloev/dvr/releases/download/rolling/preview_idle.png)
-
-![Recording](https://github.com/sloev/dvr/releases/download/rolling/preview_recording.png)
-
-![Menu](https://github.com/sloev/dvr/releases/download/rolling/preview_menu.png)
+<div align="center">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_idle.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_recording.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_stopmotion.png" width="32%">
+</div>
+<div align="center">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_menu.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_wifi.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_playback.png" width="32%">
+</div>
 
 ## ✨ Features
 
@@ -35,11 +40,12 @@ button. Plug in a tape deck, hit record, pull the power when you're done.
 - 🔊 **Stereo audio** over I2S, straight from the capture board
 - 👆 **Touch UI** rendered on top of the GPU preview — no compositor, no lag
 - 💾 **Records to USB**, safe-eject button, never touches the SD card
+- 🎬 **Stopmotion Mode** — capture frames, use onion skinning, and compile to MP4 natively
 - ▶️ **Playback** old clips, drop **scene markers**, auto-split long takes
-- 📶 **Wi-Fi** manager with a growing list of saved hotspots
+- 📶 **Wi-Fi** manager with on-screen keyboard and saved hotspots
 - 🔒 **Read-only SD** — just yank the power, nothing to corrupt
 - ⚡ **Boots fast**, autostarts the app, no desktop
-- ⚙️ **Resolution** switchable on-screen, persisted across reboots
+- ⚙️ **Resolution & Audio Meters** switchable on-screen, persisted across reboots
 
 ## 🚀 Get it running
 

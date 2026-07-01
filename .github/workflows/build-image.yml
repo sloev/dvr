@@ -109,6 +109,9 @@ jobs:
           fi
           # Route all pi-gen apt traffic through the host cache.
           echo "APT_PROXY=http://172.17.0.1:3142" >> pi-gen/config
+          # Enable multi-core compiling and faster compression
+          echo "COMPRESSION_LEVEL=3" >> pi-gen/config
+          echo "XZ_OPT=-T0" >> pi-gen/config
 
       - name: Build image (pi-gen, Docker)
         working-directory: pi-gen
