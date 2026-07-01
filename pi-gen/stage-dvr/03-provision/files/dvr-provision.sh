@@ -23,6 +23,10 @@ overlayroot="tmpfs:swap=0,recurse=0"
 CONF
 
 # Rebuild the initramfs so the overlayroot hook picks up the new config.
+echo -e "\033[2J\033[H"
+echo -e "\033[91m  📼 RETRO DVR \033[0m\n"
+echo -e "  Setting up the appliance for the first time..."
+echo -e "  This takes about 1-2 minutes. \033[93mDO NOT POWER OFF.\033[0m\n"
 update-initramfs -u
 
 touch "$FLAG"
