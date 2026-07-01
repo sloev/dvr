@@ -24,14 +24,14 @@ button. Plug in a tape deck, hit record, pull the power when you're done.
 ### Interface
 
 <div align="center">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_idle.png" width="32%">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_recording.png" width="32%">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_stopmotion.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_idle_9d51d6d.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_recording_9d51d6d.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_stopmotion_9d51d6d.png" width="32%">
 </div>
 <div align="center">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_menu.png" width="32%">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_wifi.png" width="32%">
-  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_playback.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_menu_9d51d6d.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_wifi_9d51d6d.png" width="32%">
+  <img src="https://github.com/sloev/dvr/releases/download/rolling/preview_playback_9d51d6d.png" width="32%">
 </div>
 
 ## ✨ Features
