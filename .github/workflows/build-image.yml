@@ -59,6 +59,14 @@ jobs:
           name: ui-previews
           path: previews
 
+      - name: Cache RaspiOS Base Image
+        uses: actions/cache@v4
+        with:
+          path: base.img.xz
+          key: base-img-${{ hashFiles('build/build.sh') }}
+          restore-keys: |
+            base-img-
+
       - name: Build custom image (Mutation buildchain)
         run: |
           sudo bash build/build.sh
