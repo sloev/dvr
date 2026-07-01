@@ -149,5 +149,7 @@ chmod 440 /etc/sudoers.d/dvr
 mkdir -p /boot/firmware/dvr-wifi
 
 echo "==> Cleaning up apt cache..."
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives; then
+    apt-get clean
+fi
 rm -rf /var/lib/apt/lists/*

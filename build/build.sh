@@ -41,7 +41,9 @@ cp /usr/bin/qemu-arm-static mnt/usr/bin/
 
 echo "==> Running chroot provisioning via systemd-nspawn..."
 # We bind-mount the entire repo into /repo so the chroot script can copy src/ and systemd/
-systemd-nspawn --quiet -D mnt --bind-ro="$(pwd)":/repo /bin/bash /repo/build/chroot.sh
+mkdir -p apt-cache-armhf
+mkdir -p mnt/var/cache/apt/archives
+systemd-nspawn --quiet -D mnt --bind-ro="$(pwd)":/repo --bind="$(pwd)/apt-cache-armhf":/var/cache/apt/archives /bin/bash /repo/build/chroot.sh
 
 echo "==> Unmounting..."
 sync

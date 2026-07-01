@@ -71,6 +71,14 @@ jobs:
           restore-keys: |
             base-img-
 
+      - name: Cache chroot APT packages (armhf)
+        uses: actions/cache@v4
+        with:
+          path: apt-cache-armhf
+          key: apt-armhf-${{ hashFiles('build/chroot.sh') }}
+          restore-keys: |
+            apt-armhf-
+
       - name: Download RaspiOS Base Image
         run: |
           IMG_URL="https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2024-03-15/2024-03-15-raspios-bookworm-armhf-lite.img.xz"
@@ -82,6 +90,10 @@ jobs:
       - name: Build custom image (Mutation buildchain)
         run: |
           sudo bash build/build.sh
+        
+      - name: Prepare APT cache (armhf) for save
+        if: always()
+        run: sudo chmod -R a+rX apt-cache-armhf || true
         
       - name: Collect artifacts
         id: collect
