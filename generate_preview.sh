@@ -10,8 +10,16 @@ rm -f "$OUT_DIR"/*.png
 
 # Ensure dependencies are installed (for local use; CI will handle this)
 if ! command -v xdotool &> /dev/null; then
-    echo "==> Installing xdotool..."
-    sudo apt-get update && sudo apt-get install -y xdotool
+    echo "==> Please install xdotool (e.g. sudo apt-get install xdotool)"
+    exit 1
+fi
+if ! command -v scrot &> /dev/null; then
+    echo "==> Please install scrot (e.g. sudo apt-get install scrot)"
+    exit 1
+fi
+if ! command -v Xvfb &> /dev/null; then
+    echo "==> Please install Xvfb (e.g. sudo apt-get install xvfb)"
+    exit 1
 fi
 
 echo "==> Starting DVR UI in preview mode (virtual frame buffer)..."
@@ -62,6 +70,11 @@ echo "==> Opening Wi-Fi Panel..."
 xdotool mousemove 200 150 click 1
 sleep 2
 scrot "$OUT_DIR/preview_wifi.png"
+
+echo "==> Triggering the keyboard..."
+xdotool key F1
+sleep 2
+scrot "$OUT_DIR/preview_wifi_keyboard.png"
 
 echo "==> Closing Wi-Fi Panel..."
 xdotool mousemove 270 70 click 1

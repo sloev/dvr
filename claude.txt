@@ -1,0 +1,127 @@
+
+Both are great fits for the "lo-fi Atomos" identity — and they're exactly the kind of thing tape work needs. Let me ground the assessment in the actual pipeline before folding them in.
+
+Read
+pipeline.py
+Read the whole pipeline — both ideas slot in cleanly, and one's cheaper than you'd think. Here's my assessment grounded in the actual code.
+
+1. Proper audio meters — yes, high value, cheaper than estimated
+The groundwork is already here: level name=alevel interval=50000000 (50 ms updates) on the audio tee, and _on_element already pulls the decay array (pipeline.py:309-314). The level element exposes three arrays per channel — peak (instantaneous), rms (energy), decay (held/falling peak) — and has built-in peak-ttl + peak-falloff properties. That means PPM-style peak-hold ballistics are basically free (set hold time + falloff dB/s on the element), not hand-rolled. So:
+
+dBFS scale — level already reports dBFS; our -60…0 range is correct.
+PPM ballistics — set peak-ttl (~1.5 s hold) + peak-falloff (~8.6 dB/s ≈ IEC Type II) and read decay. Fast attack is inherent.
+VU ballistics — read rms, apply a one-pole ~300 ms integrator in the callback (a few lines).
+Clip indicator w/ red hold — latch when peak ≥ -0.1 dBFS, hold ~3 s (or until next clip).
+Selectable — a Meter class + a Settings toggle (PPM⇄VU), scale ticks at 0/-6/-12/-20/-40.
+Code touch: pipeline.py emits a richer on_level(peak_l, peak_r, rms_l, rms_r); app.py gets a Meter canvas class replacing _draw_vu. Realistically ~150–250 lines, not "few hundred+". 2B cost: ~zero — level is already running. This genuinely matters for borderline Hi8 audio, so I'd build it.
+
+2. Frame grab during record — yes, low cost, with a 2B caveat
+Our vtee already has allow-not-linked=true and we have battle-tested add/remove-branch + EOS machinery (_start_clip/_finalize_clip). A still grab is a tiny version of that:
+
+Pipeline.grab_still(path): request a vtee pad, add a transient bin queue leaky=downstream max-size-buffers=1 ! videoconvert ! jpegenc quality=90 ! filesink, probe for the first buffer → inject EOS → tear down. Reuses the exact EOS pattern.
+2B caveat: use software videoconvert for the one frame (not the v4l2convert ISP) so a grab during recording doesn't contend with the encoder's ISP context. One 1080p frame through software convert+JPEG is cheap; continuous would not be — so strictly on-demand, never a standing branch.
+JPEG, not PNG — smaller, faster, right for scene-logging stills. Saved to <usb>/stills/grab_YYYYmmdd_HHMMSS.jpg.
+Works whether or not recording (independent tee branch).
+Code touch: ~40–60 lines in pipeline.py + one UI button. Low risk.
+
+Where they land in the new UI
+Both want to be one-tap, not buried:
+
+Meters: upgrade the bottom-row VU into a proper dual meter with dBFS ticks + clip LEDs; ballistics toggle in Settings.
+📷 grab: a compact button in the bottom action row (it's a field action — burying it in the menu defeats the point).
+Updated phased plan
+Foundation: DVR_UI_PREVIEW=1 stub + bars/hero-REC/slide-up menu (always-visible).
+Meters: richer on_level + Meter class (PPM/VU/clip).
+Frame grab: grab_still + 📷 button + brief on-screen confirll.
+Polish: contextual ⊕ MARK, red recording border, eject confirm.
+Two decisions so I can build to your taste, then I'll start on Phase 1:
+
+Asked
+Meter default
+Default audio-meter ballistics? (Both will be selectable; this sets the default.)
+
+PPM + clip hold
+
+Where should the frame-grab button live, and what format?
+
+Bottom-row 📷, JPEG
+
+Good news on both — they already exist in the code today, so nothing is being lost in the redesign:
+
+Playback + delete: app.py has the Playback panel (_build_play_panel, _refresh_clips), _play_clip (fullscreen mpv with --hwdec=v4l2m2m), and _delete_clip. It works now.
+Safe-eject: _eject_usb already stops recording, then udisksctl unmount + power-off the drive (storage.py), with an "Ejected" confirmation.
+Since you've flagged both as critical, I'll promote them to front-line and harden them rather than tuck them in the menu. The trick is a context-aware bottom row so it's never crowded but the right action is always one tap:
+
+Idle:
+
+[☰]   [meters | 12.3 GB]   [▶ PLAY]   [⏏ EJECT]   [●  REC]
+Recording:
+
+[☰]   [meters | 12.3GB 00:01:23]   [⊕ MARK] [📷]   [⏏]   [■ STOP]
+⏏ EJECT is always present (both states) and front-line — never in a submenu. It gets a confirm ("Eject USB safely?" / if recording: "Stop recording and eject?") and a big "✓ Safe to remove" overlay when done. Eject flow hardened: finalize the MP4 (wait for EOS so moov is written) → sync → unmount → power-off → confirmation.
+▶ PLAY is front-line when idle (swaps to ⊕ MARK/📷 while recording, since those are the recording-time actions). Opens the existing right-slide Playback panel, which I'll touch up for fingers: bigger Play/Delete buttons, delete confirmation, tap-to-select, fullscreen mpv playback.
+The slide-up menu then holds only the non-time-critical stuff: 📶 Wi-Fi · ⚙ Settings · ℹ Info · ⏻ Power (a clean 2×2).
+This way: REC, EJECT, and PLAY/MARK are all one tap, meters are always visible, and the rare/safe-to-bury actions live in the menu.
+
+Final consolidated plan
+Foundation: DVR_UI_PREVIEW=1 stub + context-aware bars (hero REC, ☰, front-line ⏏ EJECT + ▶ PLAY).
+Meters: richer on_level (peak+rms) + Meter class — PPM + clip-hold default, VU selectable.
+Frame grab: pipeline.grab_still() (transient JPEG branch) + bottom-row 📷 → <usb>/stills/.
+Playback hardening: bigger Play/Delete, delete confirm.
+Eject hardening: confirm + clean finalize + "✓ Safe to remove".
+Polish: contextual ⊕ MARK, red recording border.
+I think we've nailed the design — I'm ready to build. Before I start:
+
+Asked
+Go / scope
+Ready for me to start implementing? And what about the two parked image-slimming substages?
+
+Build UI now, hold slim
+
+On it — building the UI now, slim substages stay parked. Let me read the remaining modules so my stubs and the eject/playback hardening match the real interfaces exactly.
+
+
+Read 3 files
+All interfaces in hand. Implementing now — slim substages stay parked. Starting with pipeline.py: PPM ballistics groundwork on the level element, a richer on_level (peak + rms), and the one-shot grab_still.
+
+Edited
+pipeline.py
++13
+-5
+Now the one-shot frame grab in pipeline.py:
+
+Edited
+pipeline.py
++68
+-0
+Now the DVR_UI_PREVIEW stubs so the UI runs on a dev machine without GStreamer/hardware:
+
+Created
+stubs.py
++160
+-0
+Now wire DVR_UI_PREVIEW into main.py:
+
+Edited
+main.py
++19
+-10
+Now the main rebuild — app.py. This replaces the layout wholesale (context-aware action row, hero REC, front-line Eject/Play, slide-up menu, PPM/VU meter with clip, frame grab, hardened eject/playback, recording border). Writing it as a coherent file:
+
+Updated
+app.py
++554
+-359
+Now compile-check everything and try to render in preview mode (install a minimal Tk if available):
+
+Ran
+Compile all sources, check tkinter
+All sources compile. No tkinter here, so I can't render the preview yet. The preview mode is specifically to fix that — let me pull in python3-tk + xvfb so I can render a real screenshot of the new layout and verify it before you ever flash an image.
+
+Ran
+Install python3-tk and xvfb to render preview
+Stopped
+continue
+
+Server is temporarily limiting requests
+Too many requests right now — try again in a moment.

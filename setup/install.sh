@@ -67,23 +67,21 @@ apt-get install -y --no-install-recommends \
     python3-evdev \
     python3-psutil
 
-echo "=== DVR install: X11 minimal (for Tkinter + xvimagesink) ==="
+echo "=== DVR install: Weston minimal (for Tkinter + xvimagesink via XWayland) ==="
 apt-get install -y --no-install-recommends \
-    xserver-xorg-core \
-    xserver-xorg-input-evdev \
-    xserver-xorg-input-libinput \
-    xserver-xorg-video-fbdev \
-    x11-xserver-utils \
-    xinit \
-    xterm
+    weston \
+    xwayland
 
-echo "=== DVR install: disabling unneeded services ==="
+echo "=== DVR install: disabling unneeded services (fast boot) ==="
 systemctl disable --now bluetooth 2>/dev/null || true
 systemctl disable --now avahi-daemon 2>/dev/null || true
 systemctl disable --now triggerhappy 2>/dev/null || true
 systemctl disable --now cups 2>/dev/null || true
-# Disable lightdm if present — we use a systemd-launched xinit instead
-systemctl disable lightdm 2>/dev/null || true
+# Disable lightdm if present — we use Weston directly
+systemctl disable --now lightdm 2>/dev/null || true
+# Mask wait-online services to significantly speed up boot
+systemctl mask NetworkManager-wait-online.service 2>/dev/null || true
+systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
 
 echo "=== DVR install: configuring autologin on tty1 ==="
 mkdir -p /etc/systemd/system/getty@tty1.service.d
@@ -114,27 +112,41 @@ ResultInactive=yes
 ResultActive=yes
 EOF
 
-echo "=== DVR install: X11 config for touch ==="
-mkdir -p /etc/X11/xorg.conf.d
-cat > /etc/X11/xorg.conf.d/99-touch.conf <<'EOF'
-Section "InputClass"
-    Identifier "DSI touchscreen"
-    MatchIsTouchscreen "on"
-    Driver "libinput"
-    Option "TransformationMatrix" "1 0 0 0 1 0 0 0 1"
-EndSection
-EOF
+echo "=== DVR install: weston config for touch ==="
+# Weston uses libinput by default, usually no extra config needed for touch
 
-echo "=== DVR install: .xinitrc for pi user ==="
-cat > /home/pi/.xinitrc <<'EOF'
-#!/bin/sh
-xset s off
-xset -dpms
-xset s noblank
-unclutter -idle 1 -root &
+echo "=== DVR install: weston.ini for pi user ==="
+mkdir -p /home/pi/.config
+cat > /home/pi/.config/weston.ini <<'EOF'
+[core]
+shell=kiosk-shell.so
+xwayland=true
+idle-time=0
+
+[autolaunch]
+path=/opt/dvr/start.sh
+EOF
+chown -R pi:pi /home/pi/.config
+
+cat > /opt/dvr/start.sh <<'EOF'
+#!/bin/bash
+# Sync logs to USB drive in background for debugging
+(
+    while true; do
+        USB_MOUNT=$(findmnt -n -O rw -t exfat,vfat,ntfs,ext4 -o TARGET | grep -E '^/(media|mnt)' | head -n 1)
+        if [ -n "$USB_MOUNT" ]; then
+            journalctl -b > "$USB_MOUNT/dvr_boot_debug.log"
+            dmesg > "$USB_MOUNT/dvr_dmesg_debug.log"
+            sleep 10
+        else
+            sleep 2
+        fi
+    done
+) &
+
 exec python3 /opt/dvr/main.py
 EOF
-chown pi:pi /home/pi/.xinitrc
+chmod +x /opt/dvr/start.sh
 
 echo "=== DVR install: installing systemd services ==="
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)/systemd"

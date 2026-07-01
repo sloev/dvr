@@ -1,13 +1,19 @@
 [Unit]
 Description=DVR HDMI Capture Application (Weston kiosk)
-After=tc358743.service network.target
+After=tc358743.service
 Wants=tc358743.service
 
 [Service]
 User=pi
 Group=pi
+PAMName=login
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-ExecStart=/usr/bin/weston --shell=kiosk-shell.so
+StandardInput=tty
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+ExecStart=/usr/bin/weston
 Restart=always
 RestartSec=3
 StandardOutput=journal

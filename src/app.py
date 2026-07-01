@@ -302,6 +302,7 @@ class DVRApp:
         self._build_play_panel()
 
         self._update_action_row()
+        self._build_keyboard()
 
         if self._is_preview:
             self._mock_preview_lbl = tk.Label(self.video_frame, bg='black')
@@ -496,12 +497,14 @@ class DVRApp:
                                   insertbackground=C_TEXT, relief='flat', font=F_UI)
         self._pw_entry.pack(side='left', fill='x', expand=True, ipady=6, padx=4)
         self._pw_entry.bind('<Return>', lambda _: self._connect_with_pw())
+        self._pw_entry.bind('<Button-1>', lambda _: self._show_keyboard(self._pw_entry))
 
         row = tk.Frame(f, bg=C_PANEL)
         row.pack(fill='x', padx=8, pady=(4, 8))
         for t, c in (('↻ Scan', self._scan_wifi), ('Connect', self._connect_with_pw)):
             _btn(row, t, c).pack(side='left', fill='x', expand=True, padx=2, ipady=8)
         self._wifi_pending = None
+        self.root.bind('<F1>', lambda _: self._show_keyboard(self._pw_entry))
 
     # ── Playback panel ──────────────────────────────────────────────────────────
 
@@ -1034,12 +1037,13 @@ class DVRApp:
         elif net.get('secure'):
             self._wifi_pending = ssid
             self._pw_entry.delete(0, 'end')
-            self._pw_entry.focus_set()
+            self._show_keyboard(self._pw_entry)
         else:
             threading.Thread(target=lambda: self.wifi.connect(ssid), daemon=True).start()
             self.root.after(4000, self._refresh_wifi_status)
 
     def _connect_with_pw(self):
+        self._hide_keyboard()
         ssid = self._wifi_pending
         pw = self._pw_entry.get()
         self._pw_entry.delete(0, 'end')
@@ -1083,6 +1087,7 @@ class DVRApp:
             self._refresh_wifi_status()
         else:
             self._wifi_open = False
+            self._hide_keyboard()
             self._slide_panel(self.wifi_panel, '_wifi_x', self._wifi_x, -PANEL_W)
 
     def _toggle_playback(self):
@@ -1258,3 +1263,154 @@ class DVRApp:
         if self._overlay is not None:
             self._overlay.destroy()
             self._overlay = None
+
+    # ── On-Screen Keyboard ────────────────────────────────────────────────────────
+
+    def _build_keyboard(self):
+        self._kbd_y = H
+        self.kbd_panel = tk.Frame(self.root, bg=C_PANEL)
+        self.kbd_panel.place(x=0, y=self._kbd_y, width=W, height=270)
+        self._kbd_target = None
+        self._kbd_state = 'lower'  # 'lower', 'upper', 'sym'
+        
+        self.kbd_top_f = tk.Frame(self.kbd_panel, bg=C_PANEL2)
+        self.kbd_top_f.pack(fill='x', padx=8, pady=(8, 4))
+        
+        self.kbd_display = tk.Label(self.kbd_top_f, text='', bg=C_PANEL2, fg=C_TEXT, font=F_UI, anchor='w')
+        self.kbd_display.pack(side='left', fill='x', expand=True, padx=10, ipady=8)
+        
+        _btn(self.kbd_top_f, 'Submit', lambda: self._on_kbd_press('↵'), 
+             bg=C_BLUE, fg='white', activebackground=C_BORDER).pack(side='right', padx=4, ipady=6, ipadx=16)
+        
+        self.kbd_keys_frame = tk.Frame(self.kbd_panel, bg=C_PANEL)
+        self.kbd_keys_frame.pack(fill='both', expand=True, padx=4, pady=(0, 4))
+        
+        self._render_keyboard()
+        
+    def _render_keyboard(self):
+        for widget in self.kbd_keys_frame.winfo_children():
+            widget.destroy()
+            
+        layouts = {
+            'lower': [
+                "q w e r t y u i o p å",
+                "a s d f g h j k l æ ø",
+                "⇧ z x c v b n m ⌫",
+                "123 , [ space ] . ↵"
+            ],
+            'upper': [
+                "Q W E R T Y U I O P Å",
+                "A S D F G H J K L Æ Ø",
+                "⇧ Z X C V B N M ⌫",
+                "123 , [ space ] . ↵"
+            ],
+            'sym': [
+                "1 2 3 4 5 6 7 8 9 0 +",
+                "- / : ; ( ) $ & @ \" '",
+                "ABC # % * ! ? = _ ⌫",
+                "ABC , [ space ] . ↵"
+            ]
+        }
+        
+        layout = layouts[self._kbd_state]
+        
+        import re
+        for r_idx, row in enumerate(layout):
+            row_f = tk.Frame(self.kbd_keys_frame, bg=C_PANEL)
+            row_f.pack(fill='x', expand=True)
+            
+            keys = re.findall(r'\[ space \]|[^ ]+', row)
+            
+            for k in keys:
+                txt = k
+                w = 1
+                bg = C_PANEL2
+                if k == '[ space ]':
+                    txt = ' '
+                    w = 5
+                elif k in ('⇧', '⌫', '↵', '123', 'ABC'):
+                    w = 1.5
+                    bg = C_BORDER
+                    if k == '⇧' and self._kbd_state == 'upper':
+                        bg = C_BLUE
+                
+                f = tk.Frame(row_f, bg=C_PANEL)
+                f.pack(side='left', fill='both', expand=True)
+                f.grid_columnconfigure(0, weight=int(w*10))
+                
+                b = tk.Button(f, text=txt, font=F_BTN, bg=bg, fg=C_TEXT,
+                              activebackground=C_BLUE, activeforeground='white',
+                              relief='flat', bd=0, cursor='hand2',
+                              command=lambda key=k: self._on_kbd_press(key))
+                b.grid(row=0, column=0, sticky='nsew', padx=2, pady=2)
+                f.grid_rowconfigure(0, weight=1)
+
+    def _update_kbd_display(self):
+        if not self._kbd_target:
+            return
+        txt = self._kbd_target.get()
+        show_char = self._kbd_target.cget('show')
+        if show_char:
+            txt = show_char * len(txt)
+        self.kbd_display.config(text=txt)
+
+    def _on_kbd_press(self, key):
+        if not self._kbd_target:
+            return
+            
+        if key == '⇧':
+            self._kbd_state = 'upper' if self._kbd_state == 'lower' else 'lower'
+            self._render_keyboard()
+        elif key == '123':
+            self._kbd_state = 'sym'
+            self._render_keyboard()
+        elif key == 'ABC':
+            self._kbd_state = 'lower'
+            self._render_keyboard()
+        elif key == '⌫':
+            idx = self._kbd_target.index('insert')
+            if idx > 0:
+                self._kbd_target.delete(idx - 1)
+        elif key == '↵':
+            self._hide_keyboard()
+            if self._kbd_target == self._pw_entry:
+                self._connect_with_pw()
+        elif key == '[ space ]':
+            self._kbd_target.insert('insert', ' ')
+        else:
+            self._kbd_target.insert('insert', key)
+            if self._kbd_state == 'upper':
+                self._kbd_state = 'lower'
+                self._render_keyboard()
+                
+        self._update_kbd_display()
+
+    def _slide_kbd(self, current, target, done=None):
+        if current == target:
+            if done:
+                done()
+            return
+        step = SLIDE_STEP if target > current else -SLIDE_STEP
+        nxt = current + step
+        if (step > 0 and nxt >= target) or (step < 0 and nxt <= target):
+            nxt = target
+        self._kbd_y = nxt
+        self.kbd_panel.place(x=0, y=nxt, width=W, height=270)
+        self.kbd_panel.lift()
+        if nxt != target:
+            self.root.after(SLIDE_MS, lambda: self._slide_kbd(nxt, target, done))
+        elif done:
+            done()
+
+    def _show_keyboard(self, target):
+        self._kbd_target = target
+        self._kbd_state = 'lower'
+        self._render_keyboard()
+        self._update_kbd_display()
+        target.focus_set()
+        if getattr(self, '_kbd_y', H) != H - 270:
+            self._slide_kbd(self._kbd_y, H - 270)
+
+    def _hide_keyboard(self):
+        if getattr(self, '_kbd_y', H) != H:
+            self._slide_kbd(self._kbd_y, H, done=lambda: setattr(self, '_kbd_target', None))
