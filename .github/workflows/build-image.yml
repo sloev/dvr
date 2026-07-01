@@ -39,6 +39,10 @@ jobs:
       - name: Generate previews
         run: ./generate_preview.sh
 
+      - name: Prepare APT cache for save
+        if: always()
+        run: sudo chmod -R a+rX /var/cache/apt/archives || true
+
       - name: Upload preview artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -66,6 +70,14 @@ jobs:
           key: base-img-${{ hashFiles('build/build.sh') }}
           restore-keys: |
             base-img-
+
+      - name: Download RaspiOS Base Image
+        run: |
+          IMG_URL="https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2024-03-15/2024-03-15-raspios-bookworm-armhf-lite.img.xz"
+          if [ ! -f "base.img.xz" ]; then
+              echo "==> Downloading RaspiOS Lite..."
+              wget -qO "base.img.xz" "$IMG_URL"
+          fi
 
       - name: Build custom image (Mutation buildchain)
         run: |

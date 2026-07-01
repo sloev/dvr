@@ -10,13 +10,12 @@ echo "==> Setting up dependencies..."
 apt-get update -y
 apt-get install -y qemu-user-static systemd-container parted e2fsprogs wget xz-utils curl
 
-IMG_URL="https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2024-03-15/2024-03-15-raspios-bookworm-armhf-lite.img.xz"
 IMG_XZ="base.img.xz"
 WORK_IMG="dvr-build.img"
 
 if [ ! -f "$IMG_XZ" ]; then
-    echo "==> Downloading RaspiOS Lite..."
-    wget -qO "$IMG_XZ" "$IMG_URL"
+    echo "Error: $IMG_XZ not found. Please download it first."
+    exit 1
 fi
 
 echo "==> Decompressing image..."
