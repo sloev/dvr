@@ -77,8 +77,8 @@ idle-time=0
 [libinput]
 enable-tap=true
 
-[shell]
-client=/usr/local/bin/dvr-start.sh
+[autolaunch]
+path=/usr/local/bin/dvr-start.sh
 EOF
 
 # Start wrapper script that loads dvr.env and restarts the app if it exits
@@ -87,6 +87,8 @@ cat > "${ROOTFS_DIR}/usr/local/bin/dvr-start.sh" <<'EOF'
 while :; do
     [ -f /boot/firmware/dvr.env ] && . /boot/firmware/dvr.env
     export DVR_WIDTH DVR_HEIGHT DVR_FPS DVR_BITRATE DVR_CLIP_SECONDS
+    export GST_REGISTRY_1_0=/opt/dvr/.cache/gstreamer-1.0/registry.bin
+    export GST_REGISTRY_UPDATE=no
     python3 /opt/dvr/main.py
     sleep 2
 done
