@@ -3,16 +3,6 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "==> Updating and installing packages..."
-apt-get update -y
-apt-get install -y --no-install-recommends \
-    gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad gstreamer1.0-alsa gstreamer1.0-x \
-    python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
-    v4l-utils python3-tk python3-psutil python3-pil \
-    alsa-utils network-manager udisks2 exfatprogs dosfstools parted \
-    weston xwayland fonts-dejavu-core mpv overlayroot
-
 echo "==> Configuring Boot Settings..."
 FW="/boot/firmware"
 cat >> "${FW}/config.txt" <<'EOF'

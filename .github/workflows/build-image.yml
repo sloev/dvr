@@ -67,19 +67,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: base.img.xz
-          key: base-img-${{ hashFiles('build/build.sh') }}
+          key: base-img-${{ hashFiles('build/01-apt.sh') }}
           restore-keys: |
             base-img-
 
-      - name: Cache chroot APT packages (armhf)
+      - name: Cache Phase 1 Image (Base OS + APT)
+        id: cache-apt-img
         uses: actions/cache@v4
         with:
-          path: apt-cache-armhf
-          key: apt-armhf-${{ hashFiles('build/chroot.sh') }}
-          restore-keys: |
-            apt-armhf-
+          path: dvr-build.img
+          key: apt-img-${{ hashFiles('build/01-apt.sh', 'build/chroot-apt.sh') }}
 
       - name: Download RaspiOS Base Image
+        if: steps.cache-apt-img.outputs.cache-hit != 'true'
         run: |
           IMG_URL="https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2024-03-15/2024-03-15-raspios-bookworm-armhf-lite.img.xz"
           if [ ! -f "base.img.xz" ]; then
@@ -87,13 +87,16 @@ jobs:
               wget -qO "base.img.xz" "$IMG_URL"
           fi
 
-      - name: Build custom image (Mutation buildchain)
+      - name: Build Phase 1 (Base OS + APT)
+        if: steps.cache-apt-img.outputs.cache-hit != 'true'
         run: |
-          sudo bash build/build.sh
-        
-      - name: Prepare APT cache (armhf) for save
-        if: always()
-        run: sudo chmod -R a+rX apt-cache-armhf || true
+          sudo bash build/01-apt.sh
+          # Make sure the image is readable by the runner for caching
+          sudo chown runner:runner dvr-build.img
+
+      - name: Build Phase 2 (App + Config)
+        run: |
+          sudo bash build/02-app.sh
         
       - name: Collect artifacts
         id: collect

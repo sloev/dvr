@@ -39,26 +39,11 @@ mount "${LOOP_DEV}p1" mnt/boot/firmware
 # Copy qemu-arm-static so chroot works natively on x86 CI runners
 cp /usr/bin/qemu-arm-static mnt/usr/bin/
 
-echo "==> Running chroot provisioning via systemd-nspawn..."
-# We bind-mount the entire repo into /repo so the chroot script can copy src/ and systemd/
-mkdir -p apt-cache-armhf
-mkdir -p mnt/var/cache/apt/archives
-systemd-nspawn --quiet -D mnt --bind-ro="$(pwd)":/repo --bind="$(pwd)/apt-cache-armhf":/var/cache/apt/archives /bin/bash /repo/build/chroot.sh
+echo "==> Running APT provisioning via systemd-nspawn..."
+systemd-nspawn --quiet -D mnt --bind-ro="$(pwd)":/repo /bin/bash /repo/build/chroot-apt.sh
 
-echo "==> Unmounting..."
+echo "==> Unmounting Phase 1..."
 sync
 umount mnt/boot/firmware
 umount mnt
 losetup -d "$LOOP_DEV"
-
-echo "==> Shrinking final image..."
-if [ ! -f "pishrink.sh" ]; then
-    wget -qO pishrink.sh https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh
-    chmod +x pishrink.sh
-fi
-./pishrink.sh -s -a "$WORK_IMG" "dvr-latest-armhf.img"
-
-echo "==> Compressing output..."
-xz -T0 -3 -f "dvr-latest-armhf.img"
-
-echo "==> Done: dvr-latest-armhf.img.xz"
