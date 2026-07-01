@@ -5,8 +5,7 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 
 # One build at a time; a newer push cancels the in-flight build.
 concurrency:
@@ -26,22 +25,22 @@ jobs:
       - name: Cache APT packages
         uses: actions/cache@v4
         with:
-          path: /var/cache/apt/archives
+          path: apt-cache-preview
           key: apt-${{ runner.os }}-${{ hashFiles('generate_preview.sh') }}
 
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/apt.conf.d/docker-clean
+          mkdir -p apt-cache-preview
+          sudo cp -an apt-cache-preview/. /var/cache/apt/archives/ || true
           sudo apt-get update
           sudo apt-get install -y --download-only python3-tk python3-pil fonts-dejavu-core xvfb scrot xdotool
+          sudo cp -an /var/cache/apt/archives/. apt-cache-preview/
+          sudo chown -R runner:runner apt-cache-preview
           sudo apt-get install -y python3-tk python3-pil fonts-dejavu-core xvfb scrot xdotool
 
       - name: Generate previews
         run: ./generate_preview.sh
-
-      - name: Prepare APT cache for save
-        if: always()
-        run: sudo chmod -R a+rX /var/cache/apt/archives || true
 
       - name: Upload preview artifacts
         uses: actions/upload-artifact@v4
