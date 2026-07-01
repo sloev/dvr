@@ -91,7 +91,30 @@ jobs:
           mkdir -p out
           cp "$OUT" "out/${OUT}"
           ( cd out && sha256sum "${OUT}" > "${OUT}.sha256" )
-          cp previews/*.png out/ 2>/dev/null || true
+          
+          # Cachebusting: Add short SHA to preview filenames
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          for f in previews/preview_*.png; do
+            if [ -f "$f" ]; then
+              base=$(basename "$f" .png)
+              # Remove old cachebusters if present
+              clean_base=$(echo "$base" | sed -E 's/_[0-9a-f]{7}$//')
+              cp "$f" "out/${clean_base}_${SHORT_SHA}.png"
+            fi
+          done
+          
+          # Update references in README and index.html
+          sed -i -E "s/(preview_[a-z_]+)(_[0-9a-f]{7})?\.png/\1_${SHORT_SHA}.png/g" README.md docs/index.html || true
+          
+          # Commit and push changes to master
+          if [[ "${{ github.ref }}" == "refs/heads/master" || "${{ github.ref }}" == "refs/heads/main" ]]; then
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add README.md docs/index.html
+            git commit -m "ci: update preview cachebusters [skip ci]" || true
+            git push origin HEAD:${GITHUB_REF} || true
+          fi
+          
           ls -lh out
           echo "name=${OUT}" >> "$GITHUB_OUTPUT"
 
@@ -109,3 +132,25 @@ jobs:
             out/${{ steps.collect.outputs.name }} \
             out/${{ steps.collect.outputs.name }}.sha256 \
             out/*.png
+
+  pages:
+    needs: build
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Checkout the latest commit which includes the cachebuster updates
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: './docs'
+      - uses: actions/deploy-pages@v4
+        id: deployment
