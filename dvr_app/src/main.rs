@@ -10,6 +10,7 @@ use tower_http::services::ServeDir;
 use std::process::Command;
 use chrono::Local;
 use std::io::Write;
+use futures::stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
