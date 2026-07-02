@@ -21,7 +21,7 @@
 - [x] **I2S Audio Capture (HDMI):** Integrate `alsasrc` (I2S from tc358743) into the GStreamer pipeline and multiplex it with the H264 video into the `.mp4`.
 - [x] **Metadata Markers:** Inject `markers.txt` events directly into the MP4 file metadata (e.g. GStreamer Tags/Chapters) during recording.
 - [x] **Boot Graphics / Logo:** Configure the OS to display a custom splash screen (e.g. `fbsplash` or drawing to `/dev/fb0`) during boot to hide console text.
-- [x] **Full CI/CD Pipeline:** Ensure GitHub Actions correctly packages the `.img` and builds the Rust app reliably.
+- [x] **Full CI/CD Pipeline:** Implemented a sequential, cached, multi-job workflow (`test-app` → `build-app` → `build-os` → `release` / `docs` for GitHub Pages).
 - [x] **Documentation & Assets:** Write a comprehensive `README.md`, include UI screenshots, and structure the GitHub page.
 - [x] **Audio Meters & UI:** Display visual audio meters (PPM/VU) in the Slint UI.
 - [x] **Stopmotion Mode:** Capture individual frames, show onion skinning, and compile to `.mp4` (Stubbed out).

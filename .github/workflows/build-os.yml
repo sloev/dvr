@@ -1,4 +1,4 @@
-name: Build OS Image
+name: CI/CD Pipeline
 
 on:
   push:
@@ -9,13 +9,76 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build:
+  test-app:
+    name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - name: Cache Cargo registry and index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dvr_app/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
 
+      - name: Test Rust App (aarch64)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace/dvr_app \
+            alpine:latest \
+            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev && cargo test"
+
+  build-app:
+    name: Build Application
+    needs: test-app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry and index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dvr_app/target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+
+      - name: Compile Rust App (aarch64 release)
+        run: |
+          docker run --rm \
+            --platform linux/arm64 \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace/dvr_app \
+            alpine:latest \
+            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev && cargo build --release"
+            
+      - name: Upload Application Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-app
+          path: dvr_app/target/release/dvr_app
+          retention-days: 1
+
+  build-os:
+    name: Build OS Image
+    needs: build-app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -30,14 +93,14 @@ jobs:
             echo "VERSION=${GITHUB_SHA::7}" >> $GITHUB_ENV
           fi
 
-      - name: Compile Rust App (aarch64)
-        run: |
-          docker run --rm \
-            --platform linux/arm64 \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace/dvr_app \
-            alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev && cargo build --release"
+      - name: Download Application Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-app
+          path: dvr_app/target/release/
+          
+      - name: Fix Permissions
+        run: chmod +x dvr_app/target/release/dvr_app
 
       - name: Build Alpine Linux OS Image
         run: |
@@ -60,8 +123,45 @@ jobs:
           name: dvr_alpine_aarch64
           path: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    name: Create Release
+    needs: build-os
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Version
+        id: vars
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Download OS Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dvr_alpine_aarch64
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
+
+  docs:
+    name: Update GitHub Pages
+    needs: build-os
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate static HTML from README
+        run: |
+          mkdir -p public
+          echo "<!DOCTYPE html><html><head><title>DVR Project</title><meta charset='utf-8'><link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css'><style>body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 45px; } .markdown-body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 45px; }</style></head><body class='markdown-body'>" > public/index.html
+          # A simple markdown to html conversion using pandoc or basic echo
+          sudo apt-get update && sudo apt-get install -y pandoc
+          pandoc README.md >> public/index.html
+          echo "</body></html>" >> public/index.html
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
