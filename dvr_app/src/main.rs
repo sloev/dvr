@@ -4,8 +4,8 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sysinfo::{System, Disks};
-use axum::{routing::get, Router};
+use sysinfo::System;
+use axum::Router;
 use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
@@ -13,6 +13,8 @@ use futures::stream::StreamExt;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::process::Command;
 use gstreamer_app::AppSink;
+
+mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,25 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cpu = sys.global_cpu_info().cpu_usage();
             let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
             
-            let disks = Disks::new_with_refreshed_list();
-            let mut disk_usage = 0.0;
-            for disk in &disks {
-                if disk.mount_point().to_str() == Some("/mnt/dvr_storage") {
-                    disk_usage = (disk.total_space() - disk.available_space()) as f32 / disk.total_space() as f32 * 100.0;
-                }
-            }
-
-            if disk_usage > 90.0 {
-                tokio::task::spawn_blocking(|| {
-                    if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                        let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
-                        files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
-                        if let Some(oldest) = files.iter().find(|f| f.path().extension().unwrap_or_default() == "mp4") {
-                            let _ = std::fs::remove_file(oldest.path());
-                        }
-                    }
-                }).await.unwrap_or_default();
-            }
+            let disk_usage = tokio::task::spawn_blocking(|| {
+                let mut storage_sys = crate::storage::RealStorageSystem::new();
+                crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage")
+            }).await.unwrap_or(0.0);
 
             let cpu_str = format!("{:.1}%", cpu);
             let ram_str = format!("{:.1}%", ram);
