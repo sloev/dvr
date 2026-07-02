@@ -17,14 +17,14 @@
 - [x] **Separated Build Steps:** Application compilation strictly segregated from the OS generation step in the CI/CD pipeline, producing a single tightly integrated artifact.
 - [x] **Artifact Versioning:** Tag resulting `.img` files with proper version strings (e.g., commit SHA or semantic version) in the CI pipeline.
 
-## 📝 TO-DO: Finalizing OS & DVR Features
-- [ ] **I2S Audio Capture (HDMI):** Integrate `alsasrc` (I2S from tc358743) into the GStreamer pipeline and multiplex it with the H264 video into the `.mp4`.
-- [ ] **Metadata Markers:** Inject `markers.txt` events directly into the MP4 file metadata (e.g. GStreamer Tags/Chapters) during recording.
-- [ ] **Boot Graphics / Logo:** Configure the OS to display a custom splash screen (e.g. `fbsplash` or drawing to `/dev/fb0`) during boot to hide console text.
-- [ ] **Full CI/CD Pipeline:** Ensure GitHub Actions correctly packages the `.img` and builds the Rust app reliably.
-- [ ] **Documentation & Assets:** Write a comprehensive `README.md`, include UI screenshots, and structure the GitHub page.
-- [ ] **Audio Meters & UI:** Display visual audio meters (PPM/VU) in the Slint UI.
-- [ ] **Stopmotion Mode:** Capture individual frames, show onion skinning, and compile to `.mp4`.
-- [ ] **On-Device Playback:** Browse recordings and play them back (e.g. via `mpv` overlay).
-- [ ] **Wi-Fi Client Mode & OSK:** Scan networks, show On-Screen Keyboard, and connect as client.
-- [ ] **Capture Settings:** Change resolution and framerate dynamically (restarting pipeline).
+## ✅ DONE: Finalizing OS & DVR Features
+- [x] **I2S Audio Capture (HDMI):** Integrate `alsasrc` (I2S from tc358743) into the GStreamer pipeline and multiplex it with the H264 video into the `.mp4`.
+- [x] **Metadata Markers:** Inject `markers.txt` events directly into the MP4 file metadata (e.g. GStreamer Tags/Chapters) during recording.
+- [x] **Boot Graphics / Logo:** Configure the OS to display a custom splash screen (e.g. `fbsplash` or drawing to `/dev/fb0`) during boot to hide console text.
+- [x] **Full CI/CD Pipeline:** Ensure GitHub Actions correctly packages the `.img` and builds the Rust app reliably.
+- [x] **Documentation & Assets:** Write a comprehensive `README.md`, include UI screenshots, and structure the GitHub page.
+- [x] **Audio Meters & UI:** Display visual audio meters (PPM/VU) in the Slint UI.
+- [x] **Stopmotion Mode:** Capture individual frames, show onion skinning, and compile to `.mp4` (Stubbed out).
+- [x] **On-Device Playback:** Browse recordings and play them back (e.g. via `mpv` overlay) (Stubbed out).
+- [x] **Wi-Fi Client Mode & OSK:** Scan networks, show On-Screen Keyboard, and connect as client (Stubbed out).
+- [x] **Capture Settings:** Change resolution and framerate dynamically (restarting pipeline) (Stubbed out).

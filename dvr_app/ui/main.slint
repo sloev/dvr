@@ -7,9 +7,10 @@ export component AppWindow inherits Window {
     in property <string> disk-usage: "0%";
     in property <string> ram-usage: "0%";
     in property <string> cpu-load: "0%";
-    in property <string> fps-text: "0 FPS";
+    in property <string> fps-text: "30 FPS";
     in property <string> recording-time: "00:00:00";
     in property <string> notification-text: "";
+    in property <float> audio-level: 0.0; // 0.0 to 1.0
 
     callback record-clicked();
     callback stop-clicked();
@@ -19,6 +20,10 @@ export component AppWindow inherits Window {
     callback format-usb-clicked();
     callback eject-usb-clicked();
     callback shutdown-clicked();
+    callback toggle-stopmotion-clicked();
+    callback play-video-clicked();
+    callback wifi-settings-clicked();
+    callback capture-settings-clicked();
 
     // Top Dashboard
     Rectangle {
@@ -58,14 +63,67 @@ export component AppWindow inherits Window {
 
             HorizontalLayout {
                 spacing: 40px;
+                // Audio Meter
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "MIC:"; color: white; font-size: 24px; vertical-alignment: center; }
+                    Rectangle {
+                        width: 150px;
+                        height: 30px;
+                        background: #333;
+                        border-radius: 5px;
+                        Rectangle {
+                            width: 150px * audio-level;
+                            height: 30px;
+                            background: audio-level > 0.8 ? red : (audio-level > 0.5 ? yellow : green);
+                            border-radius: 5px;
+                            horizontal-alignment: left;
+                        }
+                    }
+                }
                 Text { text: "CPU: " + cpu-load; color: white; font-size: 24px; vertical-alignment: center; }
                 Text { text: "RAM: " + ram-usage; color: white; font-size: 24px; vertical-alignment: center; }
                 Text { text: "DISK: " + disk-usage; color: white; font-size: 24px; vertical-alignment: center; }
+                Text { text: fps-text; color: white; font-size: 24px; vertical-alignment: center; }
             }
         }
     }
 
-    // Side Controls (Settings, Format, Eject, Power)
+    // Left Controls (Advanced Features)
+    Rectangle {
+        y: 120px;
+        x: 20px;
+        width: 250px;
+        height: 400px;
+        background: transparent;
+        
+        VerticalLayout {
+            spacing: 20px;
+            
+            Rectangle {
+                height: 80px; background: #444; border-radius: 40px;
+                Text { text: "🎬 Stopmotion"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.toggle-stopmotion-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #444; border-radius: 40px;
+                Text { text: "▶ Play Video"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.play-video-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #444; border-radius: 40px;
+                Text { text: "📶 Wi-Fi Client"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.wifi-settings-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #444; border-radius: 40px;
+                Text { text: "⚙ Settings"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.capture-settings-clicked(); } }
+            }
+        }
+    }
+
+    // Right Controls (Quick Actions)
     Rectangle {
         y: 120px;
         x: 1700px;
