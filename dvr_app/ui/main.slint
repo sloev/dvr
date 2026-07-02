@@ -4,6 +4,8 @@ export component AppWindow inherits Window {
     background: transparent; // For KMS/DRM
 
     in property <bool> is-recording: false;
+    in property <bool> is-stopmotion-mode: false;
+    in property <int> stopmotion-frame-count: 0;
     in property <string> disk-usage: "0%";
     in property <string> ram-usage: "0%";
     in property <string> cpu-load: "0%";
@@ -11,6 +13,11 @@ export component AppWindow inherits Window {
     in property <string> recording-time: "00:00:00";
     in property <string> notification-text: "";
     in property <float> audio-level: 0.0; // 0.0 to 1.0
+
+    in property <bool> is-wifi-mode: false;
+    in property <bool> is-settings-mode: false;
+    in property <string> wifi-ssid: "";
+    in property <string> wifi-password: "";
 
     callback record-clicked();
     callback stop-clicked();
@@ -21,9 +28,13 @@ export component AppWindow inherits Window {
     callback eject-usb-clicked();
     callback shutdown-clicked();
     callback toggle-stopmotion-clicked();
+    callback stopmotion-capture-clicked();
+    callback stopmotion-compile-clicked();
     callback play-video-clicked();
     callback wifi-settings-clicked();
+    callback connect-wifi-clicked();
     callback capture-settings-clicked();
+    callback apply-settings-clicked();
 
     // Top Dashboard
     Rectangle {
@@ -47,7 +58,7 @@ export component AppWindow inherits Window {
                     background: is-recording ? red : gray;
                 }
                 Text {
-                    text: is-recording ? "REC " + recording-time : "READY";
+                    text: is-stopmotion-mode ? "STOPMOTION: " + stopmotion-frame-count + " frames" : (is-recording ? "REC " + recording-time : "READY");
                     color: white;
                     font-size: 32px;
                     font-weight: 800;
@@ -89,8 +100,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Left Controls (Advanced Features)
-    Rectangle {
+    if !is-stopmotion-mode: Rectangle {
         y: 120px;
         x: 20px;
         width: 250px;
@@ -123,8 +133,87 @@ export component AppWindow inherits Window {
         }
     }
 
+    if is-stopmotion-mode: Rectangle {
+        y: 120px;
+        x: 20px;
+        width: 250px;
+        height: 400px;
+        background: transparent;
+        
+        VerticalLayout {
+            spacing: 20px;
+            
+            Rectangle {
+                height: 80px; background: #ff3333; border-radius: 40px;
+                Text { text: "Exit Stopmo"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.toggle-stopmotion-clicked(); } }
+            }
+        }
+    }
+
+    if is-settings-mode: Rectangle {
+        y: 120px;
+        x: 300px;
+        width: 600px;
+        height: 400px;
+        background: #333333f0;
+        border-radius: 20px;
+        
+        VerticalLayout {
+            padding: 20px;
+            spacing: 20px;
+            
+            Text { text: "Capture Settings"; color: white; font-size: 32px; horizontal-alignment: center; }
+            
+            Text { text: "Resolution: 1920x1080 -> 1280x720"; color: white; font-size: 24px; }
+            
+            Rectangle {
+                height: 80px; background: #555; border-radius: 20px;
+                Text { text: "Apply (Restart Required)"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.apply-settings-clicked(); } }
+            }
+            
+            Rectangle {
+                height: 80px; background: #ff3333; border-radius: 20px;
+                Text { text: "Cancel"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.capture-settings-clicked(); } }
+            }
+        }
+    }
+
+    if is-wifi-mode: Rectangle {
+        y: 120px;
+        x: 300px;
+        width: 600px;
+        height: 400px;
+        background: #333333f0;
+        border-radius: 20px;
+        
+        VerticalLayout {
+            padding: 20px;
+            spacing: 20px;
+            
+            Text { text: "Wi-Fi Settings"; color: white; font-size: 32px; horizontal-alignment: center; }
+            
+            Text { text: "SSID: (Hardcoded for demo)"; color: white; font-size: 24px; }
+            
+            Rectangle {
+                height: 80px; background: #555; border-radius: 20px;
+                Text { text: "Connect to Network"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.connect-wifi-clicked(); } }
+            }
+            
+            Rectangle {
+                height: 80px; background: #ff3333; border-radius: 20px;
+                Text { text: "Cancel"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.wifi-settings-clicked(); } }
+            }
+        }
+    }
+
+
     // Right Controls (Quick Actions)
-    Rectangle {
+    if !is-stopmotion-mode: Rectangle {
         y: 120px;
         x: 1700px;
         width: 200px;
@@ -163,7 +252,7 @@ export component AppWindow inherits Window {
     }
 
     // Bottom Controls
-    Rectangle {
+    if !is-stopmotion-mode: Rectangle {
         y: 920px;
         x: 20px;
         width: 1880px;
@@ -199,6 +288,38 @@ export component AppWindow inherits Window {
                 border-radius: 50px;
                 Text { text: "Gallery"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.gallery-clicked(); } }
+            }
+        }
+    }
+
+    // Stopmotion Bottom Controls
+    if is-stopmotion-mode: Rectangle {
+        y: 920px;
+        x: 20px;
+        width: 1880px;
+        height: 140px;
+        background: transparent;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 60px;
+
+            Rectangle {
+                width: 300px;
+                height: 100px;
+                background: #ff9900;
+                border-radius: 50px;
+                Text { text: "Capture Frame"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.stopmotion-capture-clicked(); } }
+            }
+
+            Rectangle {
+                width: 300px;
+                height: 100px;
+                background: #3399ff;
+                border-radius: 50px;
+                Text { text: "Compile Video"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.stopmotion-compile-clicked(); } }
             }
         }
     }

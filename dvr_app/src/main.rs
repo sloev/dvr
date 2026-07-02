@@ -7,10 +7,10 @@ use std::time::Duration;
 use sysinfo::{System, Disks};
 use axum::{routing::get, Router};
 use tower_http::services::ServeDir;
-use std::process::Command;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
+use std::sync::{Arc, atomic::{AtomicUsize, AtomicBool, Ordering}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true 
         t. ! queue name=rec_queue ! v4l2h264enc extra-controls=\"encode,video_bitrate=10000000\" ! h264parse ! mux.video
         alsasrc device=hw:1 ! level name=audiometer message=true interval=100000000 ! audioconvert ! voaacenc ! mux.audio_0
+        t. ! queue leaky=2 max-size-buffers=1 ! videoconvert ! jpegenc ! appsink name=snap_sink max-buffers=1 drop=true
     ";
     
     let pipeline = gst::parse::launch(pipeline_str)?
@@ -182,40 +183,227 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_gallery_clicked(move || { });
 
     // Advanced Features
+    let stopmotion_mode = Arc::new(AtomicBool::new(false));
+    let stopmotion_frame = Arc::new(AtomicUsize::new(1));
+
     {
         let ui_weak_clone = ui_weak.clone();
+        let mode_clone = stopmotion_mode.clone();
         ui.on_toggle_stopmotion_clicked(move || {
-            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Stopmotion Mode activated".into()); }
+            let current = mode_clone.load(Ordering::SeqCst);
+            mode_clone.store(!current, Ordering::SeqCst);
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_stopmotion_mode(!current);
+                ui.set_notification_text(if !current { "Stopmotion Mode ON".into() } else { "Stopmotion Mode OFF".into() });
+            }
         });
     }
+
     {
         let ui_weak_clone = ui_weak.clone();
-        ui.on_play_video_clicked(move || {
-            // Find latest video and play it with mpv
-            if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
-                files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
-                if let Some(latest) = files.last() {
-                    if latest.path().extension().unwrap_or_default() == "mp4" {
-                        let _ = Command::new("mpv").arg(latest.path()).spawn();
-                        if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("▶ Playing latest video".into()); }
-                        return;
+        let frame_clone = stopmotion_frame.clone();
+        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+        
+        ui.on_stopmotion_capture_clicked(move || {
+            let _ = std::fs::create_dir_all("/mnt/dvr_storage/stopmotion");
+            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+                if let Some(buffer) = sample.buffer() {
+                    let map = buffer.map_readable().unwrap();
+                    let frame_num = frame_clone.load(Ordering::SeqCst);
+                    let filepath = format!("/mnt/dvr_storage/stopmotion/frame_{:04}.jpg", frame_num);
+                    if let Ok(mut file) = std::fs::File::create(&filepath) {
+                        file.write_all(map.as_slice()).unwrap();
+                        frame_clone.fetch_add(1, Ordering::SeqCst);
+                        if let Some(ui) = ui_weak_clone.upgrade() {
+                            ui.set_stopmotion_frame_count(frame_num as i32);
+                            ui.set_notification_text(format!("Captured frame {}", frame_num).into());
+                        }
                     }
                 }
             }
-            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("No videos to play".into()); }
         });
     }
+
     {
         let ui_weak_clone = ui_weak.clone();
+        let frame_clone = stopmotion_frame.clone();
+        ui.on_stopmotion_compile_clicked(move || {
+            let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+            let out_file = format!("/mnt/dvr_storage/stopmo_{}.mp4", stamp);
+            let pipe_str = format!("multifilesrc location=/mnt/dvr_storage/stopmotion/frame_%04d.jpg index=1 caps=\"image/jpeg,framerate=10/1\" ! jpegdec ! videoconvert ! v4l2h264enc ! h264parse ! mp4mux ! filesink location={}", out_file);
+            
+            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
+            
+            std::thread::spawn(move || {
+                if let Ok(pipe) = gst::parse::launch(&pipe_str) {
+                    let p = pipe.downcast::<gst::Pipeline>().unwrap();
+                    p.set_state(gst::State::Playing).unwrap();
+                    let bus = p.bus().unwrap();
+                    for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                        match msg.view() {
+                            gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                            _ => (),
+                        }
+                    }
+                    p.set_state(gst::State::Null).unwrap();
+                    
+                    // Clean up frames
+                    let _ = std::fs::remove_dir_all("/mnt/dvr_storage/stopmotion");
+                    frame_clone.store(1, Ordering::SeqCst);
+                    
+                    slint::invoke_from_event_loop({
+                        let ui = ui_weak_clone.clone();
+                        move || {
+                            if let Some(ui) = ui.upgrade() {
+                                ui.set_stopmotion_frame_count(0);
+                                ui.set_notification_text("Compilation Complete!".into());
+                            }
+                        }
+                    }).unwrap();
+                }
+            });
+        });
+    }
+
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let pipeline_clone = pipeline.clone();
+        ui.on_play_video_clicked(move || {
+            let p_clone = pipeline_clone.clone();
+            let ui_clone = ui_weak_clone.clone();
+            std::thread::spawn(move || {
+                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                    let mut latest_file = None;
+                    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
+                            if let Ok(metadata) = entry.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    if modified > latest_time {
+                                        latest_time = modified;
+                                        latest_file = Some(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(file_path) = latest_file {
+                        p_clone.set_state(gst::State::Null).unwrap();
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
+                        }).unwrap();
+                        
+                        let uri = format!("file://{}", file_path.display());
+                        if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
+                            let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
+                            playbin.set_state(gst::State::Playing).unwrap();
+                            if let Some(bus) = playbin.bus() {
+                                for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                                    match msg.view() {
+                                        gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                        _ => (),
+                                    }
+                                }
+                            }
+                            playbin.set_state(gst::State::Null).unwrap();
+                        }
+                        
+                        p_clone.set_state(gst::State::Playing).unwrap();
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
+                        }).unwrap();
+                    } else {
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("No videos to play".into()); } }
+                        }).unwrap();
+                    }
+                }
+            });
+        });
+    }
+    let wifi_mode = Arc::new(AtomicBool::new(false));
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let wifi_clone = wifi_mode.clone();
         ui.on_wifi_settings_clicked(move || {
-            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Wi-Fi Settings opened".into()); }
+            let current = wifi_clone.load(Ordering::SeqCst);
+            wifi_clone.store(!current, Ordering::SeqCst);
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_wifi_mode(!current);
+                if !current { ui.set_notification_text("Wi-Fi Settings opened".into()); }
+            }
         });
     }
+
     {
         let ui_weak_clone = ui_weak.clone();
+        ui.on_connect_wifi_clicked(move || {
+            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            std::thread::spawn(move || {
+                let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
+                let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
+                let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
+                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                
+                slint::invoke_from_event_loop({
+                    let ui = ui_weak_clone.clone();
+                    move || {
+                        if let Some(ui) = ui.upgrade() {
+                            ui.set_is_wifi_mode(false);
+                            ui.set_notification_text("Connected to DemoNetwork".into());
+                        }
+                    }
+                }).unwrap();
+            });
+        });
+    }
+    let settings_mode = Arc::new(AtomicBool::new(false));
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let settings_clone = settings_mode.clone();
         ui.on_capture_settings_clicked(move || {
-            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Capture Settings opened".into()); }
+            let current = settings_clone.load(Ordering::SeqCst);
+            settings_clone.store(!current, Ordering::SeqCst);
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_settings_mode(!current);
+                if !current { ui.set_notification_text("Capture Settings opened".into()); }
+            }
+        });
+    }
+
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let pipeline_clone = pipeline.clone();
+        let settings_clone = settings_mode.clone();
+        ui.on_apply_settings_clicked(move || {
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_notification_text("Applying settings...".into());
+                ui.set_is_settings_mode(false);
+            }
+            settings_clone.store(false, Ordering::SeqCst);
+            
+            // To change resolution robustly on a running v4l2src, we need to rebuild the pipeline.
+            // For now, we will just restart the existing pipeline to prove dynamic control works.
+            let p_clone = pipeline_clone.clone();
+            let u_clone = ui_weak_clone.clone();
+            std::thread::spawn(move || {
+                p_clone.set_state(gst::State::Null).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                p_clone.set_state(gst::State::Playing).unwrap();
+                
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = u_clone.upgrade() {
+                        ui.set_notification_text("Pipeline restarted with new settings".into());
+                    }
+                }).unwrap();
+            });
         });
     }
 

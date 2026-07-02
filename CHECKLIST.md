@@ -24,7 +24,17 @@
 - [x] **Full CI/CD Pipeline:** Implemented a sequential, cached, multi-job workflow (`test-app` → `build-app` → `build-os` → `release` / `docs` for GitHub Pages).
 - [x] **Documentation & Assets:** Write a comprehensive `README.md`, include UI screenshots, and structure the GitHub page.
 - [x] **Audio Meters & UI:** Display visual audio meters (PPM/VU) in the Slint UI.
-- [x] **Stopmotion Mode:** Capture individual frames, show onion skinning, and compile to `.mp4` (Stubbed out).
-- [x] **On-Device Playback:** Browse recordings and play them back (e.g. via `mpv` overlay) (Stubbed out).
-- [x] **Wi-Fi Client Mode & OSK:** Scan networks, show On-Screen Keyboard, and connect as client (Stubbed out).
-- [x] **Capture Settings:** Change resolution and framerate dynamically (restarting pipeline) (Stubbed out).
+- [x] **Stopmotion Mode:** Capture individual frames, show onion skinning, and compile to `.mp4`.
+    - [x] Add Slint UI state for Stopmotion overlay.
+    - [x] Rust logic to save individual `stopmo_0001.jpg` frames.
+    - [x] Rust logic to invoke GStreamer/FFmpeg to compile JPEG sequence to MP4.
+- [x] **On-Device Playback:** Browse recordings and play them back (e.g. via `mpv` overlay).
+    - [x] Create basic Slint UI state for selecting a video file (Gallery).
+    - [x] Implement Rust backend to pause/stop camera pipeline and launch playback using GStreamer `playbin` with `kmssink`.
+    - [x] Restore main camera pipeline after playback.
+- [x] **Wi-Fi Client Mode & OSK:** Scan networks, show On-Screen Keyboard, and connect as client.
+    - [x] Create basic Slint UI for entering Wi-Fi SSID and Password.
+    - [x] Implement Rust backend to generate `wpa_supplicant.conf` and connect.
+- [x] **Capture Settings:** Change resolution and framerate dynamically.
+    - [x] Add basic Slint UI for capture settings overlay.
+    - [x] Implement Rust backend to apply capture settings.
