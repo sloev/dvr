@@ -10,7 +10,7 @@ use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
