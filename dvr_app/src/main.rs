@@ -2,15 +2,17 @@ slint::include_modules!();
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::process::Command;
 use sysinfo::{System, Disks};
 use axum::{routing::get, Router};
 use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async {
         let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap());
+        let listener = match tokio::net::TcpListener::bind("0.0.0.0:80").await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap(),
+        };
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -169,9 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let tag_list = gst::TagList::builder()
-                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
-                .build();
+            let mut tag_list = gst::TagList::new();
+            let marker_text_str = marker_text.as_str();
+            tag_list.get_mut().unwrap().add::<gst::tags::Comment>(&marker_text_str, gst::TagMergeMode::Append);
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
@@ -219,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let proj_id = proj_clone.lock().unwrap().clone();
             let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
             let _ = std::fs::create_dir_all(&proj_dir);
-            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
                     let map = buffer.map_readable().unwrap();
                     let frame_num = frame_clone.load(Ordering::SeqCst);
@@ -248,6 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
             
+            let ui_weak_clone = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 if let Ok(pipe) = gst::parse::launch(&pipe_str) {
                     let p = pipe.downcast::<gst::Pipeline>().unwrap();
@@ -353,11 +359,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            let ui_weak_clone = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                let _ = Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
                 
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
