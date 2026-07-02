@@ -38,3 +38,5 @@
 - [x] **Capture Settings:** Change resolution and framerate dynamically.
     - [x] Add basic Slint UI for capture settings overlay.
     - [x] Implement Rust backend to apply capture settings.
+- [x] **Multiple Stopmotion Projects:** Ensure multiple stopmotion projects can exist simultaneously (e.g., using separate folders per project).
+- [x] **Automated UI Screenshots:** Update CI to automatically generate screenshots of all user stories and embed them in the documentation during the release/docs refresh.

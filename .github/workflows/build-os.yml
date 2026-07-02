@@ -160,6 +160,9 @@ jobs:
           pandoc README.md >> public/index.html
           echo "</body></html>" >> public/index.html
 
+      - name: Generate UI Screenshots
+        run: ./generate_screenshots.sh
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:

@@ -13,6 +13,22 @@ A highly resilient, hardware-accelerated DVR system built on Alpine Linux and Ru
 - **Timeline Markers:** Instantly inject timestamp markers into `markers.txt` and directly into the MP4 file metadata (GStreamer Tags).
 - **Wireless Retrieval:** Built-in WiFi Access Point (`DVR_DASHCAM_AP`) and Axum-based HTTP server for mobile video downloads over WLAN.
 
+## UI Screenshots
+
+The following screenshots are automatically generated during the CI build process to reflect the latest UI state:
+
+### Main Dashboard
+![Main UI](screenshots/main_ui.png)
+
+### Stopmotion Mode
+![Stopmotion Mode](screenshots/stopmotion_mode.png)
+
+### Wi-Fi Client Mode
+![Wi-Fi Mode](screenshots/wifi_mode.png)
+
+### Capture Settings
+![Settings Mode](screenshots/settings_mode.png)
+
 ## Project Structure
 
 - `build_os.sh`: The master script that generates the flashable `.img` via `alpine-make-rootfs`.
@@ -39,12 +55,14 @@ This project is equipped with a GitHub Actions workflow that automatically trigg
    ```
 4. Insert into the Raspberry Pi and power on.
 
-## Legacy Features Status
+## Advanced Features Status
 
-Many features from the legacy Python codebase have been migrated to native Rust:
+All major features have been successfully migrated to native Rust:
 - **✅ Capturing Stills**
-- **✅ Timeline Markers (Now with MP4 Tag Injection)**
+- **✅ Timeline Markers (With MP4 Tag Injection)**
 - **✅ USB Formatting (F2FS) & Ejection**
 - **✅ Power Controls**
-
-*Stopmotion Mode, On-Device Playback, and Audio Meters are slated for upcoming releases.*
+- **✅ Stopmotion Mode (Multiple Projects & Hardware MP4 Compilation)**
+- **✅ On-Device Playback (Gallery via MPV/GStreamer playbin)**
+- **✅ Wi-Fi Client Mode & OSK Support**
+- **✅ Dynamic Capture Settings**

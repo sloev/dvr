@@ -10,7 +10,7 @@ use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -185,15 +185,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
     let stopmotion_frame = Arc::new(AtomicUsize::new(1));
+    let current_stopmo_proj = Arc::new(Mutex::new(String::new()));
 
     {
         let ui_weak_clone = ui_weak.clone();
         let mode_clone = stopmotion_mode.clone();
+        let proj_clone = current_stopmo_proj.clone();
+        let frame_clone = stopmotion_frame.clone();
         ui.on_toggle_stopmotion_clicked(move || {
             let current = mode_clone.load(Ordering::SeqCst);
             mode_clone.store(!current, Ordering::SeqCst);
+            if !current {
+                // Switching ON
+                let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                *proj_clone.lock().unwrap() = stamp;
+                frame_clone.store(1, Ordering::SeqCst);
+            }
             if let Some(ui) = ui_weak_clone.upgrade() {
                 ui.set_is_stopmotion_mode(!current);
+                ui.set_stopmotion_frame_count(if !current { 0 } else { frame_clone.load(Ordering::SeqCst) as i32 - 1 });
                 ui.set_notification_text(if !current { "Stopmotion Mode ON".into() } else { "Stopmotion Mode OFF".into() });
             }
         });
@@ -202,15 +212,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         let frame_clone = stopmotion_frame.clone();
+        let proj_clone = current_stopmo_proj.clone();
         let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
         
         ui.on_stopmotion_capture_clicked(move || {
-            let _ = std::fs::create_dir_all("/mnt/dvr_storage/stopmotion");
+            let proj_id = proj_clone.lock().unwrap().clone();
+            let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
+            let _ = std::fs::create_dir_all(&proj_dir);
             if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
                     let map = buffer.map_readable().unwrap();
                     let frame_num = frame_clone.load(Ordering::SeqCst);
-                    let filepath = format!("/mnt/dvr_storage/stopmotion/frame_{:04}.jpg", frame_num);
+                    let filepath = format!("{}/frame_{:04}.jpg", proj_dir, frame_num);
                     if let Ok(mut file) = std::fs::File::create(&filepath) {
                         file.write_all(map.as_slice()).unwrap();
                         frame_clone.fetch_add(1, Ordering::SeqCst);
@@ -226,11 +239,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let ui_weak_clone = ui_weak.clone();
-        let frame_clone = stopmotion_frame.clone();
+        let proj_clone = current_stopmo_proj.clone();
         ui.on_stopmotion_compile_clicked(move || {
-            let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-            let out_file = format!("/mnt/dvr_storage/stopmo_{}.mp4", stamp);
-            let pipe_str = format!("multifilesrc location=/mnt/dvr_storage/stopmotion/frame_%04d.jpg index=1 caps=\"image/jpeg,framerate=10/1\" ! jpegdec ! videoconvert ! v4l2h264enc ! h264parse ! mp4mux ! filesink location={}", out_file);
+            let proj_id = proj_clone.lock().unwrap().clone();
+            let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
+            let out_file = format!("/mnt/dvr_storage/stopmo_proj_{}.mp4", proj_id);
+            let pipe_str = format!("multifilesrc location={}/frame_%04d.jpg index=1 caps=\"image/jpeg,framerate=10/1\" ! jpegdec ! videoconvert ! v4l2h264enc ! h264parse ! mp4mux ! filesink location={}", proj_dir, out_file);
             
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
             
@@ -247,16 +261,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     p.set_state(gst::State::Null).unwrap();
                     
-                    // Clean up frames
-                    let _ = std::fs::remove_dir_all("/mnt/dvr_storage/stopmotion");
-                    frame_clone.store(1, Ordering::SeqCst);
-                    
                     slint::invoke_from_event_loop({
                         let ui = ui_weak_clone.clone();
                         move || {
                             if let Some(ui) = ui.upgrade() {
-                                ui.set_stopmotion_frame_count(0);
-                                ui.set_notification_text("Compilation Complete!".into());
+                                ui.set_notification_text(format!("Compiled {}", out_file).into());
                             }
                         }
                     }).unwrap();
