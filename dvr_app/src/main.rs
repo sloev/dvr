@@ -96,17 +96,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(s) = m.structure() {
                     if s.name() == "level" {
                         if let Ok(rms) = s.get::<gst::Array>("rms") {
-                            if let Ok(v) = rms.as_slice()[0].get::<f64>() {
-                                // dB to linear rough conversion for UI 0.0-1.0
-                                let level = 10f32.powf((v as f32) / 20.0);
-                                slint::invoke_from_event_loop({
-                                    let ui = ui_audio.clone();
-                                    move || {
-                                        if let Some(ui) = ui.upgrade() {
-                                            ui.set_audio_level(level.clamp(0.0, 1.0));
+                            let slice = rms.as_slice();
+                            if !slice.is_empty() {
+                                if let Ok(v) = slice[0].get::<f64>() {
+                                    // dB to linear rough conversion for UI 0.0-1.0
+                                    let level = 10f32.powf((v as f32) / 20.0);
+                                    slint::invoke_from_event_loop({
+                                        let ui = ui_audio.clone();
+                                        move || {
+                                            if let Some(ui) = ui.upgrade() {
+                                                ui.set_audio_level(level.clamp(0.0, 1.0));
+                                            }
                                         }
-                                    }
-                                }).unwrap();
+                                    }).unwrap();
+                                }
                             }
                         }
                     }
@@ -165,8 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let mut tag_list = gst::TagList::new();
-            tag_list.get_mut().unwrap().add::<gst::tags::Comment>(&marker_text, gst::TagMergeMode::Append);
+            let tag_list = gst::TagList::builder()
+                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
+                .build();
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
