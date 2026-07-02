@@ -14,7 +14,7 @@
 - [x] **USB Formatting:** UI button to format `/mnt/dvr_storage` to F2FS.
 - [x] **Safe Eject:** UI button to safely unmount `/mnt/dvr_storage`.
 - [x] **System Power Management:** UI button to gracefully `poweroff`.
-- [x] **Dual OS Image Generation:** Modified build scripts to generate both a `base` OS (without the DVR app) and a `full` OS (with the DVR app).
+- [x] **Separated Build Steps:** Application compilation strictly segregated from the OS generation step in the CI/CD pipeline, producing a single tightly integrated artifact.
 - [x] **Artifact Versioning:** Tag resulting `.img` files with proper version strings (e.g., commit SHA or semantic version) in the CI pipeline.
 
 ## 📝 TO-DO: Finalizing OS & DVR Features

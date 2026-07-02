@@ -24,11 +24,10 @@ A highly resilient, hardware-accelerated DVR system built on Alpine Linux and Ru
 This project is equipped with a GitHub Actions workflow that automatically triggers on pushes to the `main` branch or when a new tag is pushed.
 
 1. **Build Environment:** Uses `ubuntu-latest` with QEMU `linux/arm64` cross-compilation Docker images.
-2. **Dual Image Generation:** The CI script automatically generates two strictly versioned artifacts per run:
-   - `dvr_alpine_base_aarch64_[VERSION].img`: The foundational, stripped-down OS without the DVR app installed.
-   - `dvr_alpine_full_aarch64_[VERSION].img`: The complete, turnkey OS preloaded with the compiled Rust DVR application.
-3. **Artifact Versioning:** Images are tagged automatically. Pushes to `main` use the short commit SHA (e.g. `1a2b3c4`), while GitHub tags (e.g. `v1.0.0`) use the semantic tag string.
-4. **Release:** Compresses the `.img` to `.tar.gz` and publishes them directly to the GitHub Releases page.
+2. **Application Compilation:** The DVR Rust application is compiled strictly in its own isolated `aarch64` Alpine container.
+3. **OS Generation:** The `build_os.sh` script constructs the read-only OS partitions and injects the pre-compiled Rust binary natively, creating a single, fully-integrated artifact: `dvr_alpine_aarch64_[VERSION].img`.
+4. **Artifact Versioning:** Images are tagged automatically. Pushes to `main` use the short commit SHA (e.g. `1a2b3c4`), while GitHub tags (e.g. `v1.0.0`) use the semantic tag string.
+5. **Release:** Compresses the `.img` to `.tar.gz` and publishes them directly to the GitHub Releases page.
 
 ## How to Flash
 
