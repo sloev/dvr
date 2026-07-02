@@ -1,0 +1,113 @@
+export component AppWindow inherits Window {
+    width: 1920px;
+    height: 1080px;
+    background: black;
+
+    in property <bool> is-recording: false;
+    in property <string> storage-available: "100GB";
+    in property <string> fps-text: "30 FPS";
+
+    callback record-clicked();
+    callback stop-clicked();
+    callback play-clicked();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 20px;
+
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: is-recording ? "🔴 RECORDING" : "READY";
+                color: is-recording ? red : white;
+                font-size: 32px;
+                font-weight: 800;
+            }
+            HorizontalLayout {
+                spacing: 20px;
+                Text {
+                    text: storage-available;
+                    color: white;
+                    font-size: 24px;
+                }
+                Text {
+                    text: fps-text;
+                    color: white;
+                    font-size: 24px;
+                }
+            }
+        }
+
+        // Main preview area
+        Rectangle {
+            background: transparent;
+            border-color: white;
+            border-width: 2px;
+            
+            // Wait for GStreamer overlay, or just a placeholder text
+            Text {
+                text: "Live Video Feed";
+                color: white;
+                font-size: 48px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 40px;
+
+            Rectangle {
+                width: 150px;
+                height: 60px;
+                background: is-recording ? gray : red;
+                border-radius: 30px;
+                Text {
+                    text: "Record";
+                    color: white;
+                    font-size: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.record-clicked(); }
+                }
+            }
+
+            Rectangle {
+                width: 150px;
+                height: 60px;
+                background: !is-recording ? gray : #ff9900;
+                border-radius: 30px;
+                Text {
+                    text: "Stop";
+                    color: white;
+                    font-size: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.stop-clicked(); }
+                }
+            }
+
+            Rectangle {
+                width: 150px;
+                height: 60px;
+                background: #00cc00;
+                border-radius: 30px;
+                Text {
+                    text: "Play";
+                    color: white;
+                    font-size: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.play-clicked(); }
+                }
+            }
+        }
+    }
+}

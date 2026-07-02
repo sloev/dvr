@@ -1,0 +1,47 @@
+name: Build OS Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: all
+
+      - name: Build Alpine Linux OS Image
+        run: |
+          docker run --rm --privileged \
+            --platform linux/arm64 \
+            -v /dev:/dev \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            alpine:latest \
+            sh -c "apk add --no-cache parted e2fsprogs dosfstools util-linux coreutils curl wget && sh build_os.sh"
+
+      - name: Compress image
+        run: |
+          tar -czvf dvr_alpine_aarch64.img.tar.gz dvr_alpine_aarch64.img
+
+      - name: Upload OS image artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: dvr_alpine_aarch64
+          path: dvr_alpine_aarch64.img.tar.gz
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dvr_alpine_aarch64.img.tar.gz
