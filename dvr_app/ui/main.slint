@@ -1,7 +1,7 @@
 export component AppWindow inherits Window {
     width: 1920px;
     height: 1080px;
-    background: transparent; // For KMS/DRM to show underneath
+    background: transparent; // For KMS/DRM
 
     in property <bool> is-recording: false;
     in property <string> disk-usage: "0%";
@@ -9,10 +9,16 @@ export component AppWindow inherits Window {
     in property <string> cpu-load: "0%";
     in property <string> fps-text: "0 FPS";
     in property <string> recording-time: "00:00:00";
+    in property <string> notification-text: "";
 
     callback record-clicked();
     callback stop-clicked();
     callback gallery-clicked();
+    callback capture-still-clicked();
+    callback add-marker-clicked();
+    callback format-usb-clicked();
+    callback eject-usb-clicked();
+    callback shutdown-clicked();
 
     // Top Dashboard
     Rectangle {
@@ -29,7 +35,6 @@ export component AppWindow inherits Window {
 
             HorizontalLayout {
                 spacing: 20px;
-                // Recording Indicator
                 Rectangle {
                     width: 40px;
                     height: 40px;
@@ -43,6 +48,12 @@ export component AppWindow inherits Window {
                     font-weight: 800;
                     vertical-alignment: center;
                 }
+                if notification-text != "": Text {
+                    text: notification-text;
+                    color: #00ff00;
+                    font-size: 28px;
+                    vertical-alignment: center;
+                }
             }
 
             HorizontalLayout {
@@ -50,7 +61,45 @@ export component AppWindow inherits Window {
                 Text { text: "CPU: " + cpu-load; color: white; font-size: 24px; vertical-alignment: center; }
                 Text { text: "RAM: " + ram-usage; color: white; font-size: 24px; vertical-alignment: center; }
                 Text { text: "DISK: " + disk-usage; color: white; font-size: 24px; vertical-alignment: center; }
-                Text { text: fps-text; color: white; font-size: 24px; vertical-alignment: center; }
+            }
+        }
+    }
+
+    // Side Controls (Settings, Format, Eject, Power)
+    Rectangle {
+        y: 120px;
+        x: 1700px;
+        width: 200px;
+        height: 400px;
+        background: transparent;
+        
+        VerticalLayout {
+            spacing: 20px;
+            
+            Rectangle {
+                height: 80px; background: #555; border-radius: 40px;
+                Text { text: "📷 Still"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.capture-still-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #555; border-radius: 40px;
+                Text { text: "⊕ Marker"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.add-marker-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #800000; border-radius: 40px;
+                Text { text: "Format USB"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.format-usb-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #888; border-radius: 40px;
+                Text { text: "⏏ Eject"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.eject-usb-clicked(); } }
+            }
+            Rectangle {
+                height: 80px; background: #ff3333; border-radius: 40px;
+                Text { text: "⏻ Power"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.shutdown-clicked(); } }
             }
         }
     }
@@ -72,13 +121,7 @@ export component AppWindow inherits Window {
                 height: 100px;
                 background: is-recording ? gray : #ff3333;
                 border-radius: 50px;
-                Text {
-                    text: "Record";
-                    color: white;
-                    font-size: 32px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+                Text { text: "Record"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.record-clicked(); } }
             }
 
@@ -87,13 +130,7 @@ export component AppWindow inherits Window {
                 height: 100px;
                 background: !is-recording ? gray : #ff9900;
                 border-radius: 50px;
-                Text {
-                    text: "Stop";
-                    color: white;
-                    font-size: 32px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+                Text { text: "Stop"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.stop-clicked(); } }
             }
 
@@ -102,13 +139,7 @@ export component AppWindow inherits Window {
                 height: 100px;
                 background: #3399ff;
                 border-radius: 50px;
-                Text {
-                    text: "Gallery";
-                    color: white;
-                    font-size: 32px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+                Text { text: "Gallery"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.gallery-clicked(); } }
             }
         }
