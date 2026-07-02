@@ -3,26 +3,79 @@ slint::include_modules!();
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
+use std::time::Duration;
+use sysinfo::{System, Disks};
+use axum::{routing::get, Router};
+use tower_http::services::ServeDir;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize GStreamer
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Initialize GStreamer
     gst::init()?;
 
     let ui = AppWindow::new()?;
     let ui_weak = ui.as_weak();
 
-    // Create the basic GStreamer pipeline
-    // Pipeline: v4l2src -> tee -> kmssink (for preview)
-    //                          -> [recording branch] queue -> v4l2h264enc -> h264parse -> mp4mux -> filesink
-    
-    // For this example, we'll build a dynamic pipeline that we can control.
-    let pipeline_str = "v4l2src device=/dev/video0 ! video/x-raw,width=1920,height=1080 ! tee name=t \
-        t. ! queue ! kmssink force-modesetting=true \
-        t. ! queue name=rec_queue ! v4l2h264enc ! h264parse ! mp4mux ! filesink location=/tmp/dvr_video.mp4 name=filesink";
-    
-    // In a real implementation, you'd construct this programmatically to easily add/remove the recording branch.
-    // For now, we'll just parse the string pipeline but keep the recording branch in a playing/paused state.
+    // 2. HTTP Server for Gallery (Axum)
+    tokio::spawn(async {
+        let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // 3. Telemetry Task (sysinfo)
+    let ui_telemetry = ui_weak.clone();
+    tokio::spawn(async move {
+        let mut sys = System::new_all();
+        loop {
+            sys.refresh_all();
+            let cpu = sys.global_cpu_info().cpu_usage();
+            let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
+            
+            let disks = Disks::new_with_refreshed_list();
+            let mut disk_usage = 0.0;
+            for disk in &disks {
+                if disk.mount_point().to_str() == Some("/mnt/dvr_storage") {
+                    disk_usage = (disk.total_space() - disk.available_space()) as f32 / disk.total_space() as f32 * 100.0;
+                }
+            }
+
+            // Disk sweep logic: If > 90%, delete oldest file
+            if disk_usage > 90.0 {
+                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                    let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
+                    files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
+                    if let Some(oldest) = files.first() {
+                        let _ = std::fs::remove_file(oldest.path());
+                    }
+                }
+            }
+
+            let cpu_str = format!("{:.1}%", cpu);
+            let ram_str = format!("{:.1}%", ram);
+            let disk_str = format!("{:.1}%", disk_usage);
+
+            slint::invoke_from_event_loop({
+                let ui = ui_telemetry.clone();
+                move || {
+                    if let Some(ui) = ui.upgrade() {
+                        ui.set_cpu_load(cpu_str.into());
+                        ui.set_ram_usage(ram_str.into());
+                        ui.set_disk_usage(disk_str.into());
+                    }
+                }
+            }).unwrap();
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    // 4. GStreamer Pipeline Setup
+    // v4l2src -> tee -> kmssink (Preview)
+    //                -> v4l2h264enc -> h264parse -> splitmuxsink (Recording)
+    let pipeline_str = "v4l2src device=/dev/video0 ! video/x-raw,format=UYVY,width=1920,height=1080,framerate=30/1 ! tee name=t \
+        t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true \
+        t. ! queue name=rec_queue ! v4l2h264enc extra-controls=\"encode,video_bitrate=10000000\" ! h264parse ! splitmuxsink location=/mnt/dvr_storage/dvr_%05d.mp4 max-size-bytes=1000000000 name=mux";
     
     let pipeline = gst::parse::launch(pipeline_str)?
         .downcast::<gst::Pipeline>()
@@ -30,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_recording = Arc::new(Mutex::new(false));
 
-    // Button Callbacks
+    // 5. Button Callbacks
     {
         let pipeline_clone = pipeline.clone();
         let is_recording_clone = is_recording.clone();
@@ -43,10 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ui) = ui_weak_clone.upgrade() {
                     ui.set_is_recording(true);
                 }
-                
-                // In a robust implementation, you would dynamically link the recording branch.
-                // Here we just ensure the pipeline is playing.
-                pipeline_clone.set_state(gst::State::Playing).expect("Unable to set the pipeline to the `Playing` state");
+                pipeline_clone.set_state(gst::State::Playing).expect("Unable to set playing state");
             }
         });
     }
@@ -63,26 +113,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ui) = ui_weak_clone.upgrade() {
                     ui.set_is_recording(false);
                 }
-                
-                // Send EOS event to the pipeline to safely finalize the mp4 file
+                // Send EOS to cleanly finalize mp4
                 pipeline_clone.send_event(gst::event::Eos::new());
-                
-                // Note: We need a bus watch to handle EOS and set state to Null, but for simplicity here:
-                // pipeline_clone.set_state(gst::State::Null).unwrap();
             }
         });
     }
 
-    {
-        let pipeline_clone = pipeline.clone();
-        ui.on_play_clicked(move || {
-            // Playback logic would go here. E.g., re-launching a pipeline to play /tmp/dvr_video.mp4
-            pipeline_clone.set_state(gst::State::Ready).unwrap();
-        });
-    }
+    ui.on_gallery_clicked(move || {
+        // Implementation for showing gallery or a QR code to the HTTP server
+    });
 
-    // Run the UI
-    // Note: With linuxkms backend, this will take over the DRM/KMS outputs.
+    // 6. Run the UI (takes over DRM/KMS outputs via linuxkms backend)
     ui.run()?;
 
     Ok(())

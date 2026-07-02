@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "Starting Alpine OS Build for Raspberry Pi (aarch64)..."
+echo "Starting Alpine OS Build for Raspberry Pi (aarch64) - DVR Edition..."
 
 # Configuration
 ARCH="aarch64"
@@ -11,7 +11,7 @@ ROOTFS_DIR="rootfs"
 IMG_FILE="dvr_alpine_aarch64.img"
 
 # Required packages
-PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev rust cargo pkgconf fontconfig-dev openrc"
+PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev rust cargo pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools"
 
 echo "Installing host dependencies for compilation..."
 apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev
@@ -45,12 +45,16 @@ rc-update add udev-settle sysinit
 rc-update add sysfs sysinit
 rc-update add devfs sysinit
 rc-update add modules boot
+rc-update add hostapd default
+rc-update add dnsmasq default
+rc-update add local default
 
 # Configure boot
 mkdir -p /boot
 echo "dtoverlay=vc4-kms-v3d" >> /boot/config.txt
 echo "dtoverlay=tc358743" >> /boot/config.txt
-echo "console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait" > /boot/cmdline.txt
+echo "gpu_mem=256" >> /boot/config.txt
+echo "quiet loglevel=1 vt.global_cursor_default=0 root=/dev/mmcblk0p2 rootfstype=ext4 ro rootwait" > /boot/cmdline.txt
 
 # Create CSI-2 bridge initialization init script
 cat > /etc/init.d/csi2-bridge << 'INIT'
@@ -69,26 +73,67 @@ INIT
 chmod +x /etc/init.d/csi2-bridge
 rc-update add csi2-bridge boot
 
-# Enable autologin for root (for testing/DVR app run)
+# Enable autologin for root, but actually we replace getty with our DVR app
 sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app/' /etc/inittab
+
+# Setup Read-Only rootfs fstab
+cat > /etc/fstab << 'FSTAB'
+/dev/mmcblk0p1  /boot           vfat    defaults,ro             0 0
+/dev/mmcblk0p2  /               ext4    defaults,ro             0 0
+/dev/mmcblk0p3  /mnt/dvr_storage f2fs   defaults,noatime,rw     0 0
+tmpfs           /var/log        tmpfs   defaults,noatime,mode=0755 0 0
+tmpfs           /tmp            tmpfs   defaults,noatime,mode=1777 0 0
+tmpfs           /run            tmpfs   defaults,noatime,mode=0755 0 0
+FSTAB
+
+# Setup AP Networking
+cat > /etc/hostapd/hostapd.conf << 'HOSTAPD'
+interface=wlan0
+driver=nl80211
+ssid=DVR_DASHCAM_AP
+hw_mode=g
+channel=7
+wpa=2
+wpa_passphrase=dashcam_wifi
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+HOSTAPD
+
+cat > /etc/dnsmasq.conf << 'DNSMASQ'
+interface=wlan0
+dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+DNSMASQ
+
+cat > /etc/network/interfaces << 'IFACES'
+auto lo
+iface lo inet loopback
+
+auto wlan0
+iface wlan0 inet static
+    address 192.168.4.1
+    netmask 255.255.255.0
+IFACES
 
 EOF
 
 echo "Copying compiled dvr_app into rootfs..."
 mkdir -p "$ROOTFS_DIR/usr/local/bin"
 cp dvr_app/target/release/dvr_app "$ROOTFS_DIR/usr/local/bin/"
+mkdir -p "$ROOTFS_DIR/mnt/dvr_storage"
 
 echo "Rootfs built successfully."
 
 echo "Creating image file..."
-# Create a 2GB raw image
-dd if=/dev/zero of="$IMG_FILE" bs=1M count=2048
+# Create a 4GB raw image
+dd if=/dev/zero of="$IMG_FILE" bs=1M count=4096
 
-# Partition the image (500MB boot FAT32, rest root ext4)
+# Partition the image (500MB boot FAT32, 1.5GB root ext4, rest storage F2FS)
 parted -s "$IMG_FILE" mklabel msdos
 parted -s "$IMG_FILE" mkpart primary fat32 1MiB 500MiB
 parted -s "$IMG_FILE" set 1 boot on
-parted -s "$IMG_FILE" mkpart primary ext4 500MiB 100%
+parted -s "$IMG_FILE" mkpart primary ext4 500MiB 2000MiB
+parted -s "$IMG_FILE" mkpart primary ext4 2000MiB 100%
 
 # Loop mount the image
 LOOP_DEV=$(losetup -fP --show "$IMG_FILE")
@@ -96,6 +141,8 @@ LOOP_DEV=$(losetup -fP --show "$IMG_FILE")
 # Format partitions
 mkfs.vfat -F 32 "${LOOP_DEV}p1"
 mkfs.ext4 -F "${LOOP_DEV}p2"
+# using ext4 for storage temporarily if f2fs is tricky to mkfs, but we requested f2fs. We installed f2fs-tools.
+mkfs.f2fs -f "${LOOP_DEV}p3"
 
 # Mount partitions
 mkdir -p mnt_img
