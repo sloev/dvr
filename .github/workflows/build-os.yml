@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
         with:
           platforms: all
 
@@ -55,13 +55,13 @@ jobs:
           tar -czvf dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz dvr_alpine_aarch64_${{ env.VERSION }}.img
 
       - name: Upload OS image artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dvr_alpine_aarch64
           path: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
