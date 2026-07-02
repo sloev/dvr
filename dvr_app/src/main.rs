@@ -10,7 +10,8 @@ use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,7 +24,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async {
         let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap());
+        let listener = match tokio::net::TcpListener::bind("0.0.0.0:80").await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap(),
+        };
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -169,9 +173,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let tag_list = gst::TagList::builder()
-                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
-                .build();
+            let mut tag_list = gst::TagList::new();
+            let marker_str = marker_text.as_str();
+            tag_list.get_mut().unwrap().add::<gst::tags::Comment>(&marker_str, gst::TagMergeMode::Append);
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
@@ -213,13 +217,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         let frame_clone = stopmotion_frame.clone();
         let proj_clone = current_stopmo_proj.clone();
-        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gstreamer_app::AppSink>().unwrap();
         
         ui.on_stopmotion_capture_clicked(move || {
             let proj_id = proj_clone.lock().unwrap().clone();
-            let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
-            let _ = std::fs::create_dir_all(&proj_dir);
-            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            let proj_dir = match setup_stopmotion_dir("/mnt/dvr_storage", &proj_id) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    if let Some(ui) = ui_weak_clone.upgrade() {
+                        ui.set_notification_text(format!("Error: {}", e).into());
+                    }
+                    return;
+                }
+            };
+
+            if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
                     let map = buffer.map_readable().unwrap();
                     let frame_num = frame_clone.load(Ordering::SeqCst);
@@ -248,6 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
             
+            let ui_weak_clone2 = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 if let Ok(pipe) = gst::parse::launch(&pipe_str) {
                     let p = pipe.downcast::<gst::Pipeline>().unwrap();
@@ -262,7 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     p.set_state(gst::State::Null).unwrap();
                     
                     slint::invoke_from_event_loop({
-                        let ui = ui_weak_clone.clone();
+                        let ui = ui_weak_clone2.clone();
                         move || {
                             if let Some(ui) = ui.upgrade() {
                                 ui.set_notification_text(format!("Compiled {}", out_file).into());
@@ -353,6 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            let ui_weak_clone2 = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
@@ -362,7 +376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
                 slint::invoke_from_event_loop({
-                    let ui = ui_weak_clone.clone();
+                    let ui = ui_weak_clone2.clone();
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
@@ -418,4 +432,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.run()?;
     Ok(())
+}
+
+pub fn setup_stopmotion_dir(base_path: &str, proj_id: &str) -> std::io::Result<String> {
+    let proj_dir = format!("{}/stopmo_proj_{}", base_path, proj_id);
+    std::fs::create_dir_all(&proj_dir)?;
+    Ok(proj_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn test_setup_stopmotion_dir_success() {
+        let base_path = "/tmp/test_dvr_storage";
+        let proj_id = "test_12345";
+        let expected_dir = format!("{}/stopmo_proj_{}", base_path, proj_id);
+
+        let _ = fs::remove_dir_all(&expected_dir);
+
+        let result = setup_stopmotion_dir(base_path, proj_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_dir);
+        assert!(Path::new(&expected_dir).exists());
+
+        let _ = fs::remove_dir_all(base_path);
+    }
+
+    #[test]
+    fn test_setup_stopmotion_dir_error() {
+        // use a base path where we have no permissions to create directories
+        // or a file that is used as a directory.
+        let base_path = "/tmp/test_dvr_storage_file";
+        let proj_id = "test_error";
+        let expected_dir = format!("{}/stopmo_proj_{}", base_path, proj_id);
+
+        let _ = fs::remove_dir_all(&expected_dir);
+        let _ = fs::remove_file(base_path);
+
+        fs::write(base_path, "this is a file").unwrap();
+
+        let result = setup_stopmotion_dir(base_path, proj_id);
+        assert!(result.is_err());
+
+        let _ = fs::remove_file(base_path);
+    }
 }
