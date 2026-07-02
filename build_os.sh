@@ -73,6 +73,27 @@ INIT
 chmod +x /etc/init.d/csi2-bridge
 rc-update add csi2-bridge boot
 
+# Create splash image (blank black image for seamless boot, or a custom logo)
+# Using a simple raw framebuffer dump or fbsplash if supported
+cat > /etc/init.d/fbsplash << 'SPLASH'
+#!/sbin/openrc-run
+description="Show Boot Splash"
+
+depend() {
+    need devfs sysfs
+    before csi2-bridge
+}
+
+start() {
+    ebegin "Starting fbsplash"
+    # Fallback to blanking the framebuffer if fbsplash isn't fully configured
+    dd if=/dev/zero of=/dev/fb0 bs=1M count=8 2>/dev/null || true
+    eend 0
+}
+SPLASH
+chmod +x /etc/init.d/fbsplash
+rc-update add fbsplash boot
+
 # Enable autologin for root, but actually we replace getty with our DVR app
 sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app/' /etc/inittab
 
