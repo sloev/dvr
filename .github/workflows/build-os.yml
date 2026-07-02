@@ -3,6 +3,7 @@ name: Build OS Image
 on:
   push:
     branches:
+      - master
       - main
     tags:
       - 'v*'
@@ -20,28 +21,60 @@ jobs:
         with:
           platforms: all
 
-      - name: Build Alpine Linux OS Image
+      - name: Set Version
+        id: vars
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          fi
+
+      - name: Build Alpine Linux OS Image (Base)
         run: |
           docker run --rm --privileged \
             --platform linux/arm64 \
             -v /dev:/dev \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
+            -e BUILD_TYPE=base \
+            -e VERSION=${{ env.VERSION }} \
             alpine:latest \
             sh -c "apk add --no-cache parted e2fsprogs dosfstools util-linux coreutils curl wget && sh build_os.sh"
 
-      - name: Compress image
+      - name: Build Alpine Linux OS Image (Full)
         run: |
-          tar -czvf dvr_alpine_aarch64.img.tar.gz dvr_alpine_aarch64.img
+          docker run --rm --privileged \
+            --platform linux/arm64 \
+            -v /dev:/dev \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e BUILD_TYPE=full \
+            -e VERSION=${{ env.VERSION }} \
+            alpine:latest \
+            sh -c "apk add --no-cache parted e2fsprogs dosfstools util-linux coreutils curl wget && sh build_os.sh"
 
-      - name: Upload OS image artifact
+      - name: Compress images
+        run: |
+          tar -czvf dvr_alpine_base_aarch64_${{ env.VERSION }}.img.tar.gz dvr_alpine_base_aarch64_${{ env.VERSION }}.img
+          tar -czvf dvr_alpine_full_aarch64_${{ env.VERSION }}.img.tar.gz dvr_alpine_full_aarch64_${{ env.VERSION }}.img
+
+      - name: Upload OS image artifact (Base)
         uses: actions/upload-artifact@v3
         with:
-          name: dvr_alpine_aarch64
-          path: dvr_alpine_aarch64.img.tar.gz
+          name: dvr_alpine_base_aarch64
+          path: dvr_alpine_base_aarch64_${{ env.VERSION }}.img.tar.gz
+
+      - name: Upload OS image artifact (Full)
+        uses: actions/upload-artifact@v3
+        with:
+          name: dvr_alpine_full_aarch64
+          path: dvr_alpine_full_aarch64_${{ env.VERSION }}.img.tar.gz
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: dvr_alpine_aarch64.img.tar.gz
+          files: |
+            dvr_alpine_base_aarch64_${{ env.VERSION }}.img.tar.gz
+            dvr_alpine_full_aarch64_${{ env.VERSION }}.img.tar.gz

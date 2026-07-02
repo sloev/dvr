@@ -1,25 +1,31 @@
 #!/bin/sh
 set -e
 
+BUILD_TYPE=${BUILD_TYPE:-"full"}
+VERSION=${VERSION:-"latest"}
 echo "Starting Alpine OS Build for Raspberry Pi (aarch64) - DVR Edition..."
+echo "Build Type: $BUILD_TYPE"
+echo "Version: $VERSION"
 
 # Configuration
 ARCH="aarch64"
 ALPINE_BRANCH="edge"
 MIRROR="http://dl-cdn.alpinelinux.org/alpine"
 ROOTFS_DIR="rootfs"
-IMG_FILE="dvr_alpine_aarch64.img"
+IMG_FILE="dvr_alpine_${BUILD_TYPE}_aarch64_${VERSION}.img"
 
 # Required packages
-PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev rust cargo pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools"
+PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools"
 
-echo "Installing host dependencies for compilation..."
-apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev
+if [ "$BUILD_TYPE" = "full" ]; then
+    echo "Installing host dependencies for compilation..."
+    apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev
 
-echo "Building dvr_app..."
-cd dvr_app
-cargo build --release
-cd ..
+    echo "Building dvr_app..."
+    cd dvr_app
+    cargo build --release
+    cd ..
+fi
 
 echo "Downloading alpine-make-rootfs..."
 wget -qO alpine-make-rootfs https://raw.githubusercontent.com/alpinelinux/alpine-make-rootfs/v0.7.0/alpine-make-rootfs
@@ -34,7 +40,7 @@ mkdir -p "$ROOTFS_DIR"
     --arch "$ARCH" \
     --script-chroot \
     "$ROOTFS_DIR" \
-    <<-'EOF'
+    <<EOF
 #!/bin/sh
 set -e
 
@@ -73,8 +79,7 @@ INIT
 chmod +x /etc/init.d/csi2-bridge
 rc-update add csi2-bridge boot
 
-# Create splash image (blank black image for seamless boot, or a custom logo)
-# Using a simple raw framebuffer dump or fbsplash if supported
+# Create splash image
 cat > /etc/init.d/fbsplash << 'SPLASH'
 #!/sbin/openrc-run
 description="Show Boot Splash"
@@ -94,8 +99,13 @@ SPLASH
 chmod +x /etc/init.d/fbsplash
 rc-update add fbsplash boot
 
-# Enable autologin for root, but actually we replace getty with our DVR app
-sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app/' /etc/inittab
+if [ "$BUILD_TYPE" = "full" ]; then
+    # Replace getty with DVR app
+    sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app/' /etc/inittab
+else
+    # Auto-login to root on base image
+    sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/sbin\/getty -a root 38400 tty1/' /etc/inittab
+fi
 
 # Setup Read-Only rootfs fstab
 cat > /etc/fstab << 'FSTAB'
@@ -108,6 +118,7 @@ tmpfs           /run            tmpfs   defaults,noatime,mode=0755 0 0
 FSTAB
 
 # Setup AP Networking
+mkdir -p /etc/hostapd
 cat > /etc/hostapd/hostapd.conf << 'HOSTAPD'
 interface=wlan0
 driver=nl80211
@@ -135,12 +146,14 @@ iface wlan0 inet static
     address 192.168.4.1
     netmask 255.255.255.0
 IFACES
-
 EOF
 
-echo "Copying compiled dvr_app into rootfs..."
-mkdir -p "$ROOTFS_DIR/usr/local/bin"
-cp dvr_app/target/release/dvr_app "$ROOTFS_DIR/usr/local/bin/"
+if [ "$BUILD_TYPE" = "full" ]; then
+    echo "Copying compiled dvr_app into rootfs..."
+    mkdir -p "$ROOTFS_DIR/usr/local/bin"
+    cp dvr_app/target/release/dvr_app "$ROOTFS_DIR/usr/local/bin/"
+fi
+
 mkdir -p "$ROOTFS_DIR/mnt/dvr_storage"
 
 echo "Rootfs built successfully."
@@ -162,7 +175,6 @@ LOOP_DEV=$(losetup -fP --show "$IMG_FILE")
 # Format partitions
 mkfs.vfat -F 32 "${LOOP_DEV}p1"
 mkfs.ext4 -F "${LOOP_DEV}p2"
-# using ext4 for storage temporarily if f2fs is tricky to mkfs, but we requested f2fs. We installed f2fs-tools.
 mkfs.f2fs -f "${LOOP_DEV}p3"
 
 # Mount partitions
