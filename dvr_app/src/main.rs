@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::task::spawn_blocking(|| {
                     if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
                         let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
-                        files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
+                        files.sort_by_cached_key(|a| a.metadata().unwrap().modified().unwrap());
                         if let Some(oldest) = files.iter().find(|f| f.path().extension().unwrap_or_default() == "mp4") {
                             let _ = std::fs::remove_file(oldest.path());
                         }
