@@ -7,7 +7,7 @@ edition = "2021"
 slint = { version = "1.5.0", features = ["backend-linuxkms"] }
 gstreamer = "0.22.0"
 gstreamer-video = "0.22.0"
-gstreamer-app = "0.22.0"
+gstreamer-app = "0.22.6"
 gstreamer-pbutils = "0.22.0"
 tokio = { version = "1.37.0", features = ["full"] }
 sysinfo = "0.30.11"
