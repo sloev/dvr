@@ -30,9 +30,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
       - name: Test Rust App (aarch64)
         run: |
           docker run --rm \
+            --platform linux/arm64 \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/dvr_app \
             alpine:latest \
@@ -55,6 +61,11 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-build-
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
 
       - name: Compile Rust App (aarch64 release)
         run: |
