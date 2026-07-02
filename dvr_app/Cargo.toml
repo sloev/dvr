@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-slint = { version = "1.5.0", features = ["linuxkms"] }
+slint = { version = "1.5.0", features = ["backend-linuxkms"] }
 gstreamer = "0.22.0"
 gstreamer-video = "0.22.0"
 gstreamer-app = "0.22.0"
