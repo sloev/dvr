@@ -1232,6 +1232,7 @@ dependencies = [
  "slint",
  "slint-build",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tower-http",
 ]

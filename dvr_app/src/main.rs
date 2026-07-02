@@ -14,6 +14,13 @@ use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::process::Command;
 use gstreamer_app::AppSink;
 
+pub fn write_wifi_config(base_path: &std::path::Path, ssid: &str, psk: &str) -> std::io::Result<()> {
+    let conf = format!("network={{\n  ssid=\"{}\"\n  psk=\"{}\"\n}}\n", ssid, psk);
+    std::fs::create_dir_all(base_path)?;
+    std::fs::write(base_path.join("wpa_supplicant.conf"), conf)?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gst::init()?;
@@ -362,10 +369,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
             let value = ui_weak_clone.clone();
             std::thread::spawn(move || {
-                let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
-                let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
-                let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                let base_path = std::path::Path::new("/etc/wpa_supplicant");
+                let ssid = "DemoNetwork";
+                let psk = "password123";
+
+                if let Err(e) = write_wifi_config(base_path, ssid, psk) {
+                    eprintln!("Failed to write Wi-Fi config: {}", e);
+                } else {
+                    let conf_path = base_path.join("wpa_supplicant.conf");
+                    let _ = std::process::Command::new("sh").arg("-c").arg(&format!("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c {}", conf_path.display())).spawn();
+                }
                 
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
@@ -426,4 +439,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_write_wifi_config_success() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let ssid = "TestNetwork";
+        let psk = "testpassword";
+
+        let result = write_wifi_config(base_path, ssid, psk);
+        assert!(result.is_ok());
+
+        let conf_path = base_path.join("wpa_supplicant.conf");
+        assert!(conf_path.exists());
+
+        let content = std::fs::read_to_string(conf_path).unwrap();
+        assert!(content.contains(ssid));
+        assert!(content.contains(psk));
+    }
+
+    #[test]
+    fn test_write_wifi_config_error_handling() {
+        // Create a read-only directory
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        let file_path = base_path.join("wpa_supplicant.conf");
+        std::fs::write(&file_path, "").unwrap();
+
+        let mut perms = std::fs::metadata(&file_path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&file_path, perms).unwrap();
+
+        let ssid = "TestNetwork";
+        let psk = "testpassword";
+
+        let result = write_wifi_config(base_path, ssid, psk);
+        assert!(result.is_err());
+    }
 }
