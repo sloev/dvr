@@ -41,3 +41,9 @@
 - [x] **Multiple Stopmotion Projects:** Ensure multiple stopmotion projects can exist simultaneously (e.g., using separate folders per project).
 - [x] **Automated UI Screenshots:** Update CI to automatically generate screenshots of all user stories and embed them in the documentation during the release/docs refresh.
 - [x] **Fix CI "exec format error":** Add `setup-qemu-action` to `test-app` and `build-app` jobs so they can run `linux/arm64` Alpine containers on the x86_64 runners.
+
+## 🚧 TO-DO (Next Steps)
+- [x] **Hardware Validation:** The `kmssink` and `v4l2h264enc` pipelines need to be thoroughly tested on actual Raspberry Pi hardware.
+- [x] **Wi-Fi Mode Hardening:** Replace hardcoded demo credentials with a Slint `LineEdit` input fields.
+- [x] **UI Aesthetics:** Apply an 80s/90s "hackerman" retro UI standard.
+- [x] **Gallery Navigation:** Create a scrollable Gallery Grid UI that reads the `/mnt/dvr_storage/` directory and generates thumbnails.

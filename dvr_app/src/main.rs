@@ -10,7 +10,7 @@ use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async {
         let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap());
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| futures::executor::block_on(tokio::net::TcpListener::bind("127.0.0.1:8080")).unwrap());
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -169,18 +169,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let tag_list = gst::TagList::builder()
-                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
-                .build();
+            let mut tag_list = gst::TagList::new();
+            tag_list.get_mut().unwrap();
+            //
+            // .build()
+
+
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
     }
 
-    ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
-    ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
-    ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
-    ui.on_gallery_clicked(move || { });
+    ui.on_format_usb_clicked(move || { let _ = std::process::Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
+    ui.on_eject_usb_clicked(move || { let _ = std::process::Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
+    ui.on_shutdown_clicked(move || { let _ = std::process::Command::new("poweroff").spawn(); });
+    let gallery_mode = Arc::new(AtomicBool::new(false));
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let gallery_clone = gallery_mode.clone();
+        ui.on_gallery_clicked(move || {
+            let current = gallery_clone.load(Ordering::SeqCst);
+            gallery_clone.store(!current, Ordering::SeqCst);
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_gallery_mode(!current);
+                if !current {
+                    let mut items = Vec::new();
+                    if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                        for entry in entries.filter_map(|e| e.ok()) {
+                            let path = entry.path();
+                            if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
+                                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                items.push(VideoItem { filename: filename.into(), path: path.to_string_lossy().to_string().into() });
+                            }
+                        }
+                    }
+                    // Sort items to show newest first
+                    items.sort_by(|a, b| b.filename.cmp(&a.filename));
+                    let model = std::rc::Rc::new(slint::VecModel::from(items));
+                    ui.set_video_items(model.into());
+                }
+            }
+        });
+    }
 
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
@@ -213,15 +243,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         let frame_clone = stopmotion_frame.clone();
         let proj_clone = current_stopmo_proj.clone();
-        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gstreamer_app::AppSink>().unwrap();
         
         ui.on_stopmotion_capture_clicked(move || {
             let proj_id = proj_clone.lock().unwrap().clone();
             let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
             let _ = std::fs::create_dir_all(&proj_dir);
-            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
-                    let map = buffer.map_readable().unwrap();
+                    if let Ok(map) = buffer.map_readable() {
+
                     let frame_num = frame_clone.load(Ordering::SeqCst);
                     let filepath = format!("{}/frame_{:04}.jpg", proj_dir, frame_num);
                     if let Ok(mut file) = std::fs::File::create(&filepath) {
@@ -234,6 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+                }
         });
     }
 
@@ -248,6 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
             
+            let ui_weak_clone = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 if let Ok(pipe) = gst::parse::launch(&pipe_str) {
                     let p = pipe.downcast::<gst::Pipeline>().unwrap();
@@ -277,61 +310,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         let pipeline_clone = pipeline.clone();
-        ui.on_play_video_clicked(move || {
+        ui.on_play_video_clicked(move |file_path: slint::SharedString| {
             let p_clone = pipeline_clone.clone();
             let ui_clone = ui_weak_clone.clone();
+            let file_path = file_path.to_string();
             std::thread::spawn(move || {
-                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                    let mut latest_file = None;
-                    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
-                            if let Ok(metadata) = entry.metadata() {
-                                if let Ok(modified) = metadata.modified() {
-                                    if modified > latest_time {
-                                        latest_time = modified;
-                                        latest_file = Some(path);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                p_clone.set_state(gst::State::Null).unwrap();
+                slint::invoke_from_event_loop({
+                    let u = ui_clone.clone();
+                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
+                }).unwrap();
 
-                    if let Some(file_path) = latest_file {
-                        p_clone.set_state(gst::State::Null).unwrap();
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
-                        }).unwrap();
-                        
-                        let uri = format!("file://{}", file_path.display());
-                        if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
-                            let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
-                            playbin.set_state(gst::State::Playing).unwrap();
-                            if let Some(bus) = playbin.bus() {
-                                for msg in bus.iter_timed(gst::ClockTime::NONE) {
-                                    match msg.view() {
-                                        gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
-                                        _ => (),
-                                    }
-                                }
+                let uri = format!("file://{}", file_path);
+                if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
+                    let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
+                    playbin.set_state(gst::State::Playing).unwrap();
+                    if let Some(bus) = playbin.bus() {
+                        for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                            match msg.view() {
+                                gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                _ => (),
                             }
-                            playbin.set_state(gst::State::Null).unwrap();
                         }
-                        
-                        p_clone.set_state(gst::State::Playing).unwrap();
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
-                        }).unwrap();
-                    } else {
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("No videos to play".into()); } }
-                        }).unwrap();
                     }
+                    playbin.set_state(gst::State::Null).unwrap();
                 }
+
+                p_clone.set_state(gst::State::Playing).unwrap();
+                slint::invoke_from_event_loop({
+                    let u = ui_clone.clone();
+                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
+                }).unwrap();
             });
         });
     }
@@ -353,8 +362,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            let ui_weak_clone = ui_weak_clone.clone();
             std::thread::spawn(move || {
-                let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
+                let ssid = ui_weak_clone.upgrade().unwrap().get_wifi_ssid(); let password = ui_weak_clone.upgrade().unwrap().get_wifi_password(); let conf = format!("network={{\n  ssid=\"{ssid}\"\n  psk=\"{password}\"\n}}\n");
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
                 let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
@@ -366,7 +376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
-                            ui.set_notification_text("Connected to DemoNetwork".into());
+                            ui.set_notification_text("Connected to Wi-Fi".into());
                         }
                     }
                 }).unwrap();
