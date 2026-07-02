@@ -36,7 +36,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/dvr_app \
             alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev curl && (cargo test 2>&1 | tee cargo.log || (echo 'Compilation failed, uploading log...'; URL=\$(curl -s -d @cargo.log https://dpaste.com/api/v2/); echo \"ERROR LOG UPLOADED TO: \$URL\"; exit 1))"
+            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev && (cargo test 2>&1 | tee cargo.log || exit 1)" || (git config --global user.name "CI" && git config --global user.email "ci@example.com" && git checkout -b debug-log || git checkout debug-log && git add dvr_app/cargo.log && git commit -m "Upload debug log" && git push -f origin debug-log && exit 1)
 
   build-app:
     name: Build Application
