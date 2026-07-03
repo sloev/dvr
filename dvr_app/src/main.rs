@@ -10,8 +10,8 @@ use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::process::Command;
 use gstreamer_app::AppSink;
 
