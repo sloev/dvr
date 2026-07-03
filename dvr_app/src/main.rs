@@ -27,7 +27,128 @@ pub fn setup_stopmotion_dir(base_path: &str, proj_id: &str) -> std::io::Result<S
     Ok(proj_dir)
 }
 
+fn generate_random_password(len: usize) -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut bytes = vec![0u8; len];
+    let from_urandom = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
+        .is_ok();
+    if !from_urandom {
+        // Should never happen on the target Linux appliance, but never ship
+        // with an empty/predictable password just because /dev/urandom was
+        // unavailable (e.g. running this codepath outside the appliance).
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(1);
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = ((seed >> ((i % 16) * 8)) & 0xff) as u8 ^ (i as u8).wrapping_mul(31);
+        }
+    }
+    bytes.iter().map(|b| CHARSET[(*b as usize) % CHARSET.len()] as char).collect()
+}
+
+/// Returns the gallery HTTP Basic Auth password: the operator-set
+/// `GALLERY_PASSWORD` env var if present, otherwise a random password that's
+/// generated once and persisted to the writable storage partition so it
+/// stays stable across reboots instead of falling back to a fixed literal
+/// default shared by every device built from this source.
+fn get_or_create_gallery_password() -> (String, bool) {
+    get_or_create_gallery_password_at("/mnt/dvr_storage", std::env::var("GALLERY_PASSWORD").ok())
+}
+
+fn get_or_create_gallery_password_at(storage_base_path: &str, env_override: Option<String>) -> (String, bool) {
+    if let Some(p) = env_override {
+        if !p.is_empty() {
+            return (p, false);
+        }
+    }
+    let secret_path = std::path::Path::new(storage_base_path).join(".device_secrets/gallery_password");
+    if let Ok(existing) = std::fs::read_to_string(&secret_path) {
+        let existing = existing.trim().to_string();
+        if !existing.is_empty() {
+            return (existing, true);
+        }
+    }
+    let generated = generate_random_password(16);
+    if let Some(parent) = secret_path.parent() {
+        if std::fs::create_dir_all(parent).is_ok() {
+            let _ = std::fs::write(&secret_path, &generated);
+        }
+    }
+    eprintln!(
+        "GALLERY_PASSWORD not set - generated a random password and saved it to {}",
+        secret_path.display()
+    );
+    (generated, true)
+}
+
+// wpa_supplicant's config format is line-based and supports C-style escape
+// sequences inside quoted strings, so a raw newline/CR in the input must be
+// escaped rather than passed through - otherwise it terminates the current
+// line early and lets an attacker-controlled SSID/PSK inject arbitrary
+// additional config directives, quote-escaping alone is not sufficient.
+fn escape_wpa_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+// Generates (and caches) a small JPEG thumbnail for a recording by grabbing
+// a single decoded frame through a short-lived, display-less pipeline - this
+// never touches the KMS/DRM sink so it can run concurrently with the live
+// camera pipeline. Returns None (leaving the gallery entry with no image)
+// on any failure rather than panicking, since thumbnailing is best-effort.
+fn generate_thumbnail(video_path: &std::path::Path) -> Option<String> {
+    let filename = video_path.file_name()?.to_string_lossy().to_string();
+    let thumb_dir = std::path::Path::new("/mnt/dvr_storage/stills/.thumbs");
+    std::fs::create_dir_all(thumb_dir).ok()?;
+    let thumb_path = thumb_dir.join(format!("{}.jpg", filename));
+    if thumb_path.exists() {
+        return Some(thumb_path.to_string_lossy().to_string());
+    }
+
+    let pipe_str = format!(
+        "filesrc location=\"{}\" ! decodebin ! videoconvert ! videoscale ! video/x-raw,width=320,height=180 ! jpegenc ! appsink name=thumb_sink max-buffers=1 drop=true",
+        video_path.display()
+    );
+    let pipeline = gst::parse::launch(&pipe_str).ok()?.downcast::<gst::Pipeline>().ok()?;
+    let sink = pipeline.by_name("thumb_sink")?.downcast::<AppSink>().ok()?;
+    if pipeline.set_state(gst::State::Playing).is_err() {
+        let _ = pipeline.set_state(gst::State::Null);
+        return None;
+    }
+
+    let saved = match sink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
+        Some(sample) => match sample.buffer() {
+            Some(buffer) => match buffer.map_readable() {
+                Ok(map) => std::fs::write(&thumb_path, map.as_slice()).is_ok(),
+                Err(_) => false,
+            },
+            None => false,
+        },
+        None => false,
+    };
+
+    let _ = pipeline.set_state(gst::State::Null);
+
+    if saved {
+        Some(thumb_path.to_string_lossy().to_string())
+    } else {
+        let _ = std::fs::remove_file(&thumb_path);
+        None
+    }
+}
+
 pub fn write_wifi_config(base_path: &std::path::Path, ssid: &str, psk: &str) -> std::io::Result<()> {
+    let ssid = escape_wpa_string(ssid);
+    let psk = escape_wpa_string(psk);
     let conf = format!("network={{\n  ssid=\"{}\"\n  psk=\"{}\"\n}}\n", ssid, psk);
     std::fs::create_dir_all(base_path)?;
     std::fs::write(base_path.join("wpa_supplicant.conf"), conf)?;
@@ -43,11 +164,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     create_storage_dirs("/mnt/dvr_storage");
 
-    tokio::spawn(async {
-        let password = std::env::var("GALLERY_PASSWORD").unwrap_or_else(|_| "password".to_string());
+    let (gallery_password, gallery_password_was_generated) = get_or_create_gallery_password();
+    if gallery_password_was_generated {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_notification_text(format!("Gallery password: {} (admin) - saved to storage", gallery_password).into());
+        }
+    }
+    tokio::spawn(async move {
         let app = Router::new()
             .nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"))
-            .layer(tower_http::validate_request::ValidateRequestHeaderLayer::basic("admin", password.as_str()));
+            .layer(tower_http::validate_request::ValidateRequestHeaderLayer::basic("admin", gallery_password.as_str()));
         let listener = match tokio::net::TcpListener::bind("0.0.0.0:80").await {
             Ok(l) => l,
             Err(_) => tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap(),
@@ -146,9 +272,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_record_clicked(move || {
             let mut recording = is_recording_clone.lock().unwrap();
             if !*recording {
-                *recording = true;
-                if let Some(ui) = ui_weak_clone.upgrade() { ui.set_is_recording(true); }
-                pipeline_clone.set_state(gst::State::Playing).expect("Unable to set playing state");
+                match pipeline_clone.set_state(gst::State::Playing) {
+                    Ok(_) => {
+                        *recording = true;
+                        if let Some(ui) = ui_weak_clone.upgrade() { ui.set_is_recording(true); }
+                    }
+                    Err(e) => {
+                        // Don't let a hardware/pipeline hiccup (e.g. camera
+                        // unplugged) take down the whole UI on the main thread.
+                        if let Some(ui) = ui_weak_clone.upgrade() {
+                            ui.set_notification_text(format!("⚠ Failed to start recording: {}", e).into());
+                        }
+                    }
+                }
             }
         });
     }
@@ -193,7 +329,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
+    {
+        let ui_weak_clone = ui_weak.clone();
+        ui.on_format_usb_requested(move || {
+            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_is_format_confirm_mode(true); }
+        });
+    }
+    {
+        let ui_weak_clone = ui_weak.clone();
+        ui.on_format_usb_cancelled(move || {
+            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_is_format_confirm_mode(false); }
+        });
+    }
+    {
+        let ui_weak_clone = ui_weak.clone();
+        ui.on_format_usb_confirmed(move || {
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_format_confirm_mode(false);
+                ui.set_notification_text("Formatting storage...".into());
+            }
+            let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn();
+        });
+    }
     ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
     ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
 
@@ -206,24 +363,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             gallery_clone.store(!current, Ordering::SeqCst);
             if let Some(ui) = ui_weak_clone.upgrade() {
                 ui.set_is_gallery_mode(!current);
-                if !current {
-                    let mut items = Vec::new();
+            }
+            if !current {
+                // Scanning the directory and generating thumbnails involves
+                // blocking I/O and short GStreamer pipelines - keep it off
+                // the UI thread so opening the gallery doesn't freeze the app.
+                let ui_weak_thread = ui_weak_clone.clone();
+                std::thread::spawn(move || {
+                    let mut files = Vec::new();
                     if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
                         for entry in entries.filter_map(|e| e.ok()) {
                             let path = entry.path();
                             if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
-                                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                                let thumb_path = "/mnt/dvr_storage/stills/placeholder.jpg";
-                                let img = slint::Image::load_from_path(std::path::Path::new(thumb_path)).unwrap_or_default();
-                                items.push(VideoItem { image_path: img, filename: filename.into(), path: path.to_string_lossy().to_string().into() });
+                                let modified = entry.metadata()
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                files.push((path, modified));
                             }
                         }
                     }
-                    // Sort items to show newest first
-                    items.sort_by(|a, b| b.filename.cmp(&a.filename));
-                    let model = std::rc::Rc::new(slint::VecModel::from(items));
-                    ui.set_video_items(model.into());
-                }
+                    // Newest first by actual modification time - a lexical
+                    // filename sort mixes dvr_* and stopmo_proj_* naming
+                    // schemes and doesn't reflect real recency once both exist.
+                    files.sort_by(|a, b| b.1.cmp(&a.1));
+
+                    // Thumbnails aren't tracked by the ring-buffer sweep in
+                    // storage.rs (it only removes .mp4 files), so prune any
+                    // cached thumbnail whose source recording is gone.
+                    let live_names: std::collections::HashSet<String> = files.iter()
+                        .filter_map(|(p, _)| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .collect();
+                    if let Ok(thumb_entries) = std::fs::read_dir("/mnt/dvr_storage/stills/.thumbs") {
+                        for entry in thumb_entries.filter_map(|e| e.ok()) {
+                            let thumb_name = entry.file_name().to_string_lossy().to_string();
+                            if let Some(source_name) = thumb_name.strip_suffix(".jpg") {
+                                if !live_names.contains(source_name) {
+                                    let _ = std::fs::remove_file(entry.path());
+                                }
+                            }
+                        }
+                    }
+
+                    // slint::Image isn't Send, so only build plain strings
+                    // here - the actual Image (and VideoItem) get constructed
+                    // back on the UI thread just before the model is set.
+                    let entries: Vec<(String, String, Option<String>)> = files.into_iter().map(|(path, _)| {
+                        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let thumb = generate_thumbnail(&path);
+                        (filename, path.to_string_lossy().to_string(), thumb)
+                    }).collect();
+
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak_thread.upgrade() {
+                            let items: Vec<VideoItem> = entries.into_iter().map(|(filename, path, thumb)| {
+                                let img = thumb
+                                    .map(|t| slint::Image::load_from_path(std::path::Path::new(&t)).unwrap_or_default())
+                                    .unwrap_or_default();
+                                VideoItem { image_path: img, filename: filename.into(), path: path.into() }
+                            }).collect();
+                            let model = std::rc::Rc::new(slint::VecModel::from(items));
+                            ui.set_video_items(model.into());
+                        }
+                    }).unwrap();
+                });
             }
         });
     }
@@ -274,11 +476,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
-                    let map = buffer.map_readable().unwrap();
+                    let Ok(map) = buffer.map_readable() else {
+                        if let Some(ui) = ui_weak_clone.upgrade() {
+                            ui.set_notification_text("⚠ Failed to read captured frame".into());
+                        }
+                        return;
+                    };
                     let frame_num = frame_clone.load(Ordering::SeqCst);
                     let filepath = format!("{}/frame_{:04}.jpg", proj_dir, frame_num);
                     if let Ok(mut file) = std::fs::File::create(&filepath) {
-                        file.write_all(map.as_slice()).unwrap();
+                        if let Err(e) = file.write_all(map.as_slice()) {
+                            if let Some(ui) = ui_weak_clone.upgrade() {
+                                ui.set_notification_text(format!("⚠ Failed to save frame: {}", e).into());
+                            }
+                            return;
+                        }
                         frame_clone.fetch_add(1, Ordering::SeqCst);
                         if let Some(ui) = ui_weak_clone.upgrade() {
                             ui.set_stopmotion_frame_count(frame_num as i32);
@@ -331,12 +543,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         let pipeline_clone = pipeline.clone();
+        let is_recording_clone = is_recording.clone();
         ui.on_play_video_clicked(move |file_path: slint::SharedString| {
             let p_clone = pipeline_clone.clone();
             let ui_clone = ui_weak_clone.clone();
             let file_path = file_path.to_string();
+            // Snapshot whether we were actually recording so we can restore
+            // (not just assume) that exact state once playback is done.
+            let was_recording = *is_recording_clone.lock().unwrap();
             std::thread::spawn(move || {
-                p_clone.set_state(gst::State::Null).unwrap();
+                if was_recording {
+                    // Finalize the in-progress recording segment cleanly (EOS)
+                    // instead of abruptly killing the pipeline, which can
+                    // truncate/corrupt the currently-open .mp4 file.
+                    p_clone.send_event(gst::event::Eos::new());
+                    if let Some(bus) = p_clone.bus() {
+                        for msg in bus.iter_timed(gst::ClockTime::from_seconds(5)) {
+                            match msg.view() {
+                                gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                _ => (),
+                            }
+                        }
+                    }
+                }
+                let _ = p_clone.set_state(gst::State::Null);
                 slint::invoke_from_event_loop({
                     let u = ui_clone.clone();
                     move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
@@ -344,20 +574,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let uri = format!("file://{}", file_path);
                 if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
-                    let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
-                    playbin.set_state(gst::State::Playing).unwrap();
-                    if let Some(bus) = playbin.bus() {
-                        for msg in bus.iter_timed(gst::ClockTime::NONE) {
-                            match msg.view() {
-                                gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
-                                _ => (),
+                    if let Ok(playbin) = pipe.downcast::<gst::Pipeline>() {
+                        let _ = playbin.set_state(gst::State::Playing);
+                        if let Some(bus) = playbin.bus() {
+                            for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                                match msg.view() {
+                                    gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                    _ => (),
+                                }
                             }
                         }
+                        let _ = playbin.set_state(gst::State::Null);
                     }
-                    playbin.set_state(gst::State::Null).unwrap();
                 }
 
-                p_clone.set_state(gst::State::Playing).unwrap();
+                // Only resume the camera pipeline (which also resumes active
+                // recording) if that's actually the state we interrupted -
+                // otherwise leave it idle, exactly as we found it.
+                if was_recording {
+                    let _ = p_clone.set_state(gst::State::Playing);
+                }
                 slint::invoke_from_event_loop({
                     let u = ui_clone.clone();
                     move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
@@ -391,8 +627,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let value = ui_weak_clone.clone();
             std::thread::spawn(move || {
-                let base_path = std::path::Path::new("/etc/wpa_supplicant");
-                if let Err(e) = write_wifi_config(base_path, &ssid, &password) {
+                // /etc is mounted read-only on the target device; /run is tmpfs and writable.
+                let base_path = std::path::Path::new("/run/wpa_supplicant");
+                let result = write_wifi_config(base_path, &ssid, &password);
+                if let Err(ref e) = result {
                     eprintln!("Failed to write Wi-Fi config: {}", e);
                 } else {
                     let conf_path = base_path.join("wpa_supplicant.conf");
@@ -406,12 +644,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 std::thread::sleep(std::time::Duration::from_secs(2));
 
+                let notification: slint::SharedString = match result {
+                    Ok(()) => "Connected to Wi-Fi".into(),
+                    Err(e) => format!("Wi-Fi connection failed: {}", e).into(),
+                };
                 slint::invoke_from_event_loop({
                     let ui = value.clone();
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
-                            ui.set_notification_text("Connected to Wi-Fi".into());
+                            ui.set_notification_text(notification);
                         }
                     }
                 }).unwrap();
@@ -544,6 +786,27 @@ mod tests {
     }
 
     #[test]
+    fn test_write_wifi_config_escapes_quotes_and_newlines() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        // A malicious SSID attempting to break out of the quoted value and
+        // inject an extra network block via an embedded quote and newlines.
+        let ssid = "eviltwin\"\n}\nnetwork={\n  ssid=\"other";
+        let psk = "pass\"word";
+
+        let result = write_wifi_config(base_path, ssid, psk);
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(base_path.join("wpa_supplicant.conf")).unwrap();
+        // Exactly one network block should exist - no raw newline or unescaped
+        // quote from the input may reach the file to break out of the value.
+        assert_eq!(content.lines().filter(|l| *l == "network={").count(), 1);
+        assert_eq!(content.lines().count(), 4);
+        assert!(content.contains("eviltwin\\\"\\n}\\nnetwork={\\n  ssid=\\\"other"));
+        assert!(content.contains("pass\\\"word"));
+    }
+
+    #[test]
     fn test_write_wifi_config_error_handling() {
         if running_as_root() {
             return;
@@ -560,5 +823,43 @@ mod tests {
 
         let result = write_wifi_config(base_path, "TestNetwork", "testpassword");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gallery_password_prefers_env_override() {
+        let dir = tempdir().unwrap();
+        let (password, generated) = get_or_create_gallery_password_at(
+            dir.path().to_str().unwrap(),
+            Some("operator-set-password".to_string()),
+        );
+        assert_eq!(password, "operator-set-password");
+        assert!(!generated);
+        // Setting an explicit password shouldn't persist a secret file.
+        assert!(!dir.path().join(".device_secrets/gallery_password").exists());
+    }
+
+    #[test]
+    fn test_gallery_password_generated_and_persisted() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path().to_str().unwrap();
+
+        let (first, generated_first) = get_or_create_gallery_password_at(base_path, None);
+        assert!(generated_first);
+        assert!(!first.is_empty());
+        assert_ne!(first, "password", "must not fall back to a literal weak default");
+
+        // A second call (e.g. after a reboot) with no env override must
+        // return the same persisted password rather than generating a new one.
+        let (second, generated_second) = get_or_create_gallery_password_at(base_path, None);
+        assert!(generated_second);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_generate_random_password_is_not_predictable_or_empty() {
+        let a = generate_random_password(16);
+        let b = generate_random_password(16);
+        assert_eq!(a.len(), 16);
+        assert_ne!(a, b);
     }
 }

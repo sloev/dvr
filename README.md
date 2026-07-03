@@ -29,6 +29,9 @@ The following screenshots are automatically generated during the CI build proces
 ### Capture Settings
 ![Settings Mode](screenshots/settings_mode.png)
 
+### Gallery
+![Gallery Mode](screenshots/gallery_mode.png)
+
 ## Project Structure
 
 - `build_os.sh`: The master script that generates the flashable `.img` via `alpine-make-rootfs`.

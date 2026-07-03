@@ -28,7 +28,7 @@ mkdir -p "$ROOTFS_DIR"
     --arch "$ARCH" \
     --script-chroot \
     "$ROOTFS_DIR" \
-    <<EOF
+    <<'EOF'
 #!/bin/sh
 set -e
 
@@ -39,7 +39,7 @@ rc-update add udev-settle sysinit
 rc-update add sysfs sysinit
 rc-update add devfs sysinit
 rc-update add modules boot
-rc-update add hostapd default
+rc-update add dvr-wifi-ap default
 rc-update add dnsmasq default
 rc-update add local default
 
@@ -101,19 +101,55 @@ tmpfs           /run            tmpfs   defaults,noatime,mode=0755 0 0
 FSTAB
 
 # Setup AP Networking
+#
+# The Wi-Fi AP passphrase is NOT baked in here: this file lives on the
+# read-only rootfs, so every device built from the same image would
+# otherwise share one publicly-known passphrase. Instead a template with a
+# placeholder is shipped, and the dvr-wifi-ap init script (below) generates
+# a random per-device passphrase on first boot, persists it to the writable
+# storage partition, and renders the real config into tmpfs at /run before
+# starting hostapd.
 mkdir -p /etc/hostapd
-cat > /etc/hostapd/hostapd.conf << 'HOSTAPD'
+cat > /etc/hostapd/hostapd.conf.template << 'HOSTAPD'
 interface=wlan0
 driver=nl80211
 ssid=DVR_DASHCAM_AP
 hw_mode=g
 channel=7
 wpa=2
-wpa_passphrase=dashcam_wifi
+wpa_passphrase=__WIFI_AP_PSK__
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 HOSTAPD
+
+# Generates (once, persisted) a random per-device AP passphrase and starts
+# hostapd against a config rendered from the template above.
+cat > /etc/init.d/dvr-wifi-ap << 'INIT'
+#!/sbin/openrc-run
+description="Generate a per-device Wi-Fi AP passphrase and start hostapd"
+
+command="/usr/sbin/hostapd"
+command_args="-B -P /run/hostapd/hostapd.pid /run/hostapd/hostapd.conf"
+pidfile="/run/hostapd/hostapd.pid"
+
+depend() {
+    need devfs sysfs net
+    after modules
+}
+
+start_pre() {
+    local psk_dir="/mnt/dvr_storage/.device_secrets"
+    local psk_file="$psk_dir/wifi_ap_psk"
+    mkdir -p "$psk_dir" /run/hostapd
+    if [ ! -s "$psk_file" ]; then
+        tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16 > "$psk_file"
+        echo >> "$psk_file"
+    fi
+    sed "s/__WIFI_AP_PSK__/$(cat "$psk_file")/" /etc/hostapd/hostapd.conf.template > /run/hostapd/hostapd.conf
+    chmod 600 /run/hostapd/hostapd.conf
+}
+INIT
+chmod +x /etc/init.d/dvr-wifi-ap
 
 cat > /etc/dnsmasq.conf << 'DNSMASQ'
 interface=wlan0
