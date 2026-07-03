@@ -13,7 +13,7 @@ ROOTFS_DIR="rootfs"
 IMG_FILE="dvr_alpine_aarch64_${VERSION}.img"
 
 # Required packages
-PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools wpa_supplicant"
+PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev libseat libxkbcommon pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools wpa_supplicant"
 
 echo "Downloading alpine-make-rootfs..."
 wget -qO alpine-make-rootfs https://raw.githubusercontent.com/alpinelinux/alpine-make-rootfs/v0.7.0/alpine-make-rootfs
