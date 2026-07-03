@@ -40,7 +40,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/dvr_app \
             alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev seatd-dev libxkbcommon-dev && (cargo test 2>&1 | tee cargo.log || exit 1)" || (git config --global user.name "CI" && git config --global user.email "ci@example.com" && git checkout -b debug-log || git checkout debug-log && git add dvr_app/cargo.log && git commit -m "Upload debug log" && git push -f origin debug-log && exit 1)
+            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev libseat-dev libxkbcommon-dev && (cargo test 2>&1 | tee cargo.log || exit 1)" || (git config --global user.name "CI" && git config --global user.email "ci@example.com" && git checkout -b debug-log || git checkout debug-log && git add dvr_app/cargo.log && git commit -m "Upload debug log" && git push -f origin debug-log && exit 1)
 
   build-app:
     name: Build Application
@@ -70,7 +70,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/dvr_app \
             alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev seatd-dev libxkbcommon-dev && cargo build --release"
+            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev libseat-dev libxkbcommon-dev && cargo build --release"
             
       - name: Upload Application Artifact
         uses: actions/upload-artifact@v4
