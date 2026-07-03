@@ -13,65 +13,56 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test-app:
-    name: Run Tests
+  test-and-build:
+    name: Test & Build Application
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Cache Cargo registry and index
+
+      # `dvr_app/target` is under the workspace, which IS bind-mounted into
+      # the container below, so this half of the cache is real. The
+      # ~/.cargo paths are NOT mounted into the container by themselves
+      # (see the docker run step) - without that mount this cache is a
+      # no-op and every run silently re-downloads the entire crate registry.
+      - name: Cache Cargo registry, git sources, and build artifacts
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             dvr_app/target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: all
 
-      - name: Test Rust App (aarch64)
+      # Test and build in a single container/profile pass: `cargo test
+      # --release` compiles the full dependency tree once, and the
+      # following `cargo build --release` reuses those already-compiled
+      # dependency artifacts (only dvr_app's own crate needs a second,
+      # much cheaper compile without the test cfg). Running both stages
+      # as one job also means the target/ dir is shared directly on disk
+      # instead of relying on a cross-job cache round-trip to line up.
+      - name: Test and build Rust App (aarch64, release)
         run: |
+          mkdir -p ~/.cargo/registry ~/.cargo/git
           docker run --rm \
             --platform linux/arm64 \
             -v ${{ github.workspace }}:/workspace \
+            -v ~/.cargo/registry:/root/.cargo/registry \
+            -v ~/.cargo/git:/root/.cargo/git \
             -w /workspace/dvr_app \
             alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev libseat-dev libxkbcommon-dev && (cargo test 2>&1 | tee cargo.log || exit 1)" || (git config --global user.name "CI" && git config --global user.email "ci@example.com" && git checkout -b debug-log || git checkout debug-log && git add dvr_app/cargo.log && git commit -m "Upload debug log" && git push -f origin debug-log && exit 1)
+            sh -c '
+              set -e
+              apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev libseat-dev libxkbcommon-dev
+              cargo test --release > cargo.log 2>&1 || (cat cargo.log; exit 1)
+              cat cargo.log
+              cargo build --release
+            ' || (git config --global user.name "CI" && git config --global user.email "ci@example.com" && git checkout -b debug-log || git checkout debug-log && git add dvr_app/cargo.log && git commit -m "Upload debug log" && git push -f origin debug-log && exit 1)
 
-  build-app:
-    name: Build Application
-    needs: test-app
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Cargo registry and index
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            dvr_app/target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-
-      - name: Compile Rust App (aarch64 release)
-        run: |
-          docker run --rm \
-            --platform linux/arm64 \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace/dvr_app \
-            alpine:latest \
-            sh -c "apk add --no-cache rust cargo gcc g++ pkgconf gstreamer-dev gst-plugins-base-dev fontconfig-dev eudev-dev libinput-dev libdrm-dev mesa-dev libseat-dev libxkbcommon-dev && cargo build --release"
-            
       - name: Upload Application Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -81,7 +72,7 @@ jobs:
 
   build-os:
     name: Build OS Image
-    needs: build-app
+    needs: test-and-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
