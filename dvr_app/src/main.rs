@@ -4,8 +4,8 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sysinfo::{System, Disks};
-use axum::{routing::get, Router};
+use sysinfo::System;
+use axum::Router;
 use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
@@ -13,6 +13,8 @@ use futures::stream::StreamExt;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::process::Command;
 use gstreamer_app::AppSink;
+
+mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,25 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cpu = sys.global_cpu_info().cpu_usage();
             let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
             
-            let disks = Disks::new_with_refreshed_list();
-            let mut disk_usage = 0.0;
-            for disk in &disks {
-                if disk.mount_point().to_str() == Some("/mnt/dvr_storage") {
-                    disk_usage = (disk.total_space() - disk.available_space()) as f32 / disk.total_space() as f32 * 100.0;
-                }
-            }
-
-            if disk_usage > 90.0 {
-                tokio::task::spawn_blocking(|| {
-                    if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                        let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
-                        files.sort_by_cached_key(|a| a.metadata().unwrap().modified().unwrap());
-                        if let Some(oldest) = files.iter().find(|f| f.path().extension().unwrap_or_default() == "mp4") {
-                            let _ = std::fs::remove_file(oldest.path());
-                        }
-                    }
-                }).await.unwrap_or_default();
-            }
+            let disk_usage = tokio::task::spawn_blocking(|| {
+                let mut storage_sys = crate::storage::RealStorageSystem::new();
+                crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage")
+            }).await.unwrap_or(0.0);
 
             let cpu_str = format!("{:.1}%", cpu);
             let ram_str = format!("{:.1}%", ram);
@@ -186,7 +173,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
     ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
     ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
-    ui.on_gallery_clicked(move || { });
 
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
@@ -365,7 +351,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                let _ = std::process::Command::new("killall")
+                    .arg("wpa_supplicant")
+                    .status();
+                let _ = std::process::Command::new("wpa_supplicant")
+                    .args(["-B", "-i", "wlan0", "-c", "/etc/wpa_supplicant/wpa_supplicant.conf"])
+                    .spawn();
                 
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
