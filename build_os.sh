@@ -6,7 +6,10 @@ echo "Starting Alpine OS Build for Raspberry Pi (aarch64) - DVR Edition..."
 echo "Version: $VERSION"
 
 # Configuration
-ARCH="aarch64"
+# Target architecture is aarch64: alpine-make-rootfs v0.7.0 has no --arch
+# flag (it uses the arch of the environment it runs in), so this relies on
+# the calling `docker run --platform linux/arm64 ...` around this whole
+# script to make that environment aarch64.
 ALPINE_BRANCH="edge"
 MIRROR="http://dl-cdn.alpinelinux.org/alpine"
 ROOTFS_DIR="rootfs"
@@ -25,7 +28,6 @@ mkdir -p "$ROOTFS_DIR"
 ./alpine-make-rootfs \
     --packages "$PACKAGES" \
     --branch "$ALPINE_BRANCH" \
-    --arch "$ARCH" \
     --script-chroot \
     "$ROOTFS_DIR" \
     <<'EOF'
