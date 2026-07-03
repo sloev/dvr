@@ -40,4 +40,9 @@ sed -i 's/is-settings-mode: false/is-settings-mode: true/' dvr_app/ui/main.slint
 capture "settings_mode"
 sed -i 's/is-settings-mode: true/is-settings-mode: false/' dvr_app/ui/main.slint
 
+# 5. Gallery Mode
+sed -i 's/is-gallery-mode: false/is-gallery-mode: true/' dvr_app/ui/main.slint
+capture "gallery_mode"
+sed -i 's/is-gallery-mode: true/is-gallery-mode: false/' dvr_app/ui/main.slint
+
 echo "Screenshots generated successfully."

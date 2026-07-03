@@ -66,7 +66,7 @@ pub fn manage_storage(sys: &mut impl StorageSystem, mount_point: &str) -> f32 {
     let disk_usage = sys.get_disk_usage(mount_point);
     if disk_usage > 90.0 {
         if let Ok(mut files) = sys.get_files(mount_point) {
-            files.sort_by_key(|f| f.modified);
+            files.sort_by_cached_key(|f| f.modified);
             if let Some(oldest) = files.iter().find(|f| f.path.extension().unwrap_or_default() == "mp4") {
                 let _ = sys.remove_file(&oldest.path);
             }

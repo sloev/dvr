@@ -16,6 +16,24 @@ use gstreamer_app::AppSink;
 
 mod storage;
 
+pub fn create_storage_dirs(base_path: &str) {
+    let stills_path = format!("{}/stills", base_path);
+    std::fs::create_dir_all(&stills_path).unwrap_or_default();
+}
+
+pub fn setup_stopmotion_dir(base_path: &str, proj_id: &str) -> std::io::Result<String> {
+    let proj_dir = format!("{}/stopmo_proj_{}", base_path, proj_id);
+    std::fs::create_dir_all(&proj_dir)?;
+    Ok(proj_dir)
+}
+
+pub fn write_wifi_config(base_path: &std::path::Path, ssid: &str, psk: &str) -> std::io::Result<()> {
+    let conf = format!("network={{\n  ssid=\"{}\"\n  psk=\"{}\"\n}}\n", ssid, psk);
+    std::fs::create_dir_all(base_path)?;
+    std::fs::write(base_path.join("wpa_supplicant.conf"), conf)?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gst::init()?;
@@ -23,10 +41,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     let ui_weak = ui.as_weak();
 
-    std::fs::create_dir_all("/mnt/dvr_storage/stills").unwrap_or_default();
+    create_storage_dirs("/mnt/dvr_storage");
 
     tokio::spawn(async {
-        let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
+        let password = std::env::var("GALLERY_PASSWORD").unwrap_or_else(|_| "password".to_string());
+        let app = Router::new()
+            .nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"))
+            .layer(tower_http::validate_request::ValidateRequestHeaderLayer::basic("admin", password.as_str()));
         let listener = match tokio::net::TcpListener::bind("0.0.0.0:80").await {
             Ok(l) => l,
             Err(_) => tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap(),
@@ -37,15 +58,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_telemetry = ui_weak.clone();
     tokio::spawn(async move {
         let mut sys = System::new_all();
+        let mut storage_sys = crate::storage::RealStorageSystem::new();
         loop {
             sys.refresh_all();
             let cpu = sys.global_cpu_info().cpu_usage();
             let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
-            
-            let disk_usage = tokio::task::spawn_blocking(|| {
-                let mut storage_sys = crate::storage::RealStorageSystem::new();
-                crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage")
-            }).await.unwrap_or(0.0);
+
+            let (next_storage_sys, disk_usage) = tokio::task::spawn_blocking(move || {
+                let usage = crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage");
+                (storage_sys, usage)
+            }).await.unwrap_or_else(|_| (crate::storage::RealStorageSystem::new(), 0.0));
+            storage_sys = next_storage_sys;
 
             let cpu_str = format!("{:.1}%", cpu);
             let ram_str = format!("{:.1}%", ram);
@@ -174,6 +197,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
     ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
 
+    let gallery_mode = Arc::new(AtomicBool::new(false));
+    {
+        let ui_weak_clone = ui_weak.clone();
+        let gallery_clone = gallery_mode.clone();
+        ui.on_gallery_clicked(move || {
+            let current = gallery_clone.load(Ordering::SeqCst);
+            gallery_clone.store(!current, Ordering::SeqCst);
+            if let Some(ui) = ui_weak_clone.upgrade() {
+                ui.set_is_gallery_mode(!current);
+                if !current {
+                    let mut items = Vec::new();
+                    if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                        for entry in entries.filter_map(|e| e.ok()) {
+                            let path = entry.path();
+                            if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
+                                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                let thumb_path = "/mnt/dvr_storage/stills/placeholder.jpg";
+                                let img = slint::Image::load_from_path(std::path::Path::new(thumb_path)).unwrap_or_default();
+                                items.push(VideoItem { image_path: img, filename: filename.into(), path: path.to_string_lossy().to_string().into() });
+                            }
+                        }
+                    }
+                    // Sort items to show newest first
+                    items.sort_by(|a, b| b.filename.cmp(&a.filename));
+                    let model = std::rc::Rc::new(slint::VecModel::from(items));
+                    ui.set_video_items(model.into());
+                }
+            }
+        });
+    }
+
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
     let stopmotion_frame = Arc::new(AtomicUsize::new(1));
@@ -209,8 +263,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         ui.on_stopmotion_capture_clicked(move || {
             let proj_id = proj_clone.lock().unwrap().clone();
-            let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
-            let _ = std::fs::create_dir_all(&proj_dir);
+            let proj_dir = match setup_stopmotion_dir("/mnt/dvr_storage", &proj_id) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    if let Some(ui) = ui_weak_clone.upgrade() {
+                        ui.set_notification_text(format!("Error: {}", e).into());
+                    }
+                    return;
+                }
+            };
             if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
                     let map = buffer.map_readable().unwrap();
@@ -270,61 +331,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         let pipeline_clone = pipeline.clone();
-        ui.on_play_video_clicked(move || {
+        ui.on_play_video_clicked(move |file_path: slint::SharedString| {
             let p_clone = pipeline_clone.clone();
             let ui_clone = ui_weak_clone.clone();
+            let file_path = file_path.to_string();
             std::thread::spawn(move || {
-                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                    let mut latest_file = None;
-                    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
-                            if let Ok(metadata) = entry.metadata() {
-                                if let Ok(modified) = metadata.modified() {
-                                    if modified > latest_time {
-                                        latest_time = modified;
-                                        latest_file = Some(path);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                p_clone.set_state(gst::State::Null).unwrap();
+                slint::invoke_from_event_loop({
+                    let u = ui_clone.clone();
+                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
+                }).unwrap();
 
-                    if let Some(file_path) = latest_file {
-                        p_clone.set_state(gst::State::Null).unwrap();
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
-                        }).unwrap();
-                        
-                        let uri = format!("file://{}", file_path.display());
-                        if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
-                            let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
-                            playbin.set_state(gst::State::Playing).unwrap();
-                            if let Some(bus) = playbin.bus() {
-                                for msg in bus.iter_timed(gst::ClockTime::NONE) {
-                                    match msg.view() {
-                                        gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
-                                        _ => (),
-                                    }
-                                }
+                let uri = format!("file://{}", file_path);
+                if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
+                    let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
+                    playbin.set_state(gst::State::Playing).unwrap();
+                    if let Some(bus) = playbin.bus() {
+                        for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                            match msg.view() {
+                                gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                _ => (),
                             }
-                            playbin.set_state(gst::State::Null).unwrap();
                         }
-                        
-                        p_clone.set_state(gst::State::Playing).unwrap();
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
-                        }).unwrap();
-                    } else {
-                        slint::invoke_from_event_loop({
-                            let u = ui_clone.clone();
-                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("No videos to play".into()); } }
-                        }).unwrap();
                     }
+                    playbin.set_state(gst::State::Null).unwrap();
                 }
+
+                p_clone.set_state(gst::State::Playing).unwrap();
+                slint::invoke_from_event_loop({
+                    let u = ui_clone.clone();
+                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
+                }).unwrap();
             });
         });
     }
@@ -345,27 +382,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
-            if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            let (ssid, password) = match ui_weak_clone.upgrade() {
+                Some(ui) => {
+                    ui.set_notification_text("Connecting to Wi-Fi...".into());
+                    (ui.get_wifi_ssid().to_string(), ui.get_wifi_password().to_string())
+                }
+                None => return,
+            };
             let value = ui_weak_clone.clone();
             std::thread::spawn(move || {
-                let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
-                let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
-                let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("killall")
-                    .arg("wpa_supplicant")
-                    .status();
-                let _ = std::process::Command::new("wpa_supplicant")
-                    .args(["-B", "-i", "wlan0", "-c", "/etc/wpa_supplicant/wpa_supplicant.conf"])
-                    .spawn();
-                
+                let base_path = std::path::Path::new("/etc/wpa_supplicant");
+                if let Err(e) = write_wifi_config(base_path, &ssid, &password) {
+                    eprintln!("Failed to write Wi-Fi config: {}", e);
+                } else {
+                    let conf_path = base_path.join("wpa_supplicant.conf");
+                    let _ = Command::new("killall")
+                        .arg("wpa_supplicant")
+                        .status();
+                    let _ = Command::new("wpa_supplicant")
+                        .args(["-B", "-i", "wlan0", "-c", conf_path.to_str().unwrap()])
+                        .spawn();
+                }
+
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                
+
                 slint::invoke_from_event_loop({
                     let ui = value.clone();
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
-                            ui.set_notification_text("Connected to DemoNetwork".into());
+                            ui.set_notification_text("Connected to Wi-Fi".into());
                         }
                     }
                 }).unwrap();
@@ -417,4 +463,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    // Permission-denied tests are meaningless when the test runner is root,
+    // since root bypasses the DAC permission checks these tests rely on.
+    fn running_as_root() -> bool {
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn test_create_storage_dirs_permission_denied() {
+        if running_as_root() {
+            return;
+        }
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path().to_str().unwrap();
+
+        let mut perms = fs::metadata(base_path).unwrap().permissions();
+        perms.set_mode(0o500); // r-x------
+        fs::set_permissions(base_path, perms).unwrap();
+
+        create_storage_dirs(base_path);
+
+        let mut perms = fs::metadata(base_path).unwrap().permissions();
+        perms.set_mode(0o700); // rwx------
+        fs::set_permissions(base_path, perms).unwrap();
+    }
+
+    #[test]
+    fn test_setup_stopmotion_dir_success() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path().to_str().unwrap();
+        let proj_id = "test_12345";
+        let expected_dir = format!("{}/stopmo_proj_{}", base_path, proj_id);
+
+        let result = setup_stopmotion_dir(base_path, proj_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_dir);
+        assert!(Path::new(&expected_dir).exists());
+    }
+
+    #[test]
+    fn test_setup_stopmotion_dir_error() {
+        let temp_dir = tempdir().unwrap();
+        let base_path = temp_dir.path().join("not_a_dir");
+        fs::write(&base_path, "this is a file").unwrap();
+
+        let result = setup_stopmotion_dir(base_path.to_str().unwrap(), "test_error");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_write_wifi_config_success() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+        let ssid = "TestNetwork";
+        let psk = "testpassword";
+
+        let result = write_wifi_config(base_path, ssid, psk);
+        assert!(result.is_ok());
+
+        let conf_path = base_path.join("wpa_supplicant.conf");
+        assert!(conf_path.exists());
+
+        let content = fs::read_to_string(conf_path).unwrap();
+        assert!(content.contains(ssid));
+        assert!(content.contains(psk));
+    }
+
+    #[test]
+    fn test_write_wifi_config_error_handling() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let base_path = dir.path();
+
+        let file_path = base_path.join("wpa_supplicant.conf");
+        fs::write(&file_path, "").unwrap();
+
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file_path, perms).unwrap();
+
+        let result = write_wifi_config(base_path, "TestNetwork", "testpassword");
+        assert!(result.is_err());
+    }
 }
