@@ -25,6 +25,7 @@ export component AppWindow inherits Window {
     in property <bool> is-wifi-mode: false;
     in property <bool> is-settings-mode: false;
     in property <bool> is-gallery-mode: false;
+    in property <bool> is-format-confirm-mode: false;
     out property <string> wifi-ssid: "";
     out property <string> wifi-password: "";
     in property <[VideoItem]> video-items: [];
@@ -34,7 +35,9 @@ export component AppWindow inherits Window {
     callback gallery-clicked();
     callback capture-still-clicked();
     callback add-marker-clicked();
-    callback format-usb-clicked();
+    callback format-usb-requested();
+    callback format-usb-confirmed();
+    callback format-usb-cancelled();
     callback eject-usb-clicked();
     callback shutdown-clicked();
     callback toggle-stopmotion-clicked();
@@ -325,6 +328,47 @@ export component AppWindow inherits Window {
     }
 
 
+    // Format USB Confirmation Panel
+    Rectangle {
+        y: is-format-confirm-mode ? 120px : -500px;
+        x: 300px;
+        width: 600px;
+        height: 300px;
+        background: #111111f0;
+        border-radius: 20px;
+        border-width: 2px;
+        border-color: #ff3333;
+        opacity: is-format-confirm-mode ? 1.0 : 0.0;
+        animate y { duration: 300ms; easing: ease-in-out; }
+        animate opacity { duration: 300ms; easing: ease-in-out; }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 20px;
+
+            Text { text: "⚠ Format Storage?"; color: #ff3333; font-size: 32px; horizontal-alignment: center; }
+            Text {
+                text: "This will permanently erase ALL recordings, stills and stopmotion projects. This cannot be undone.";
+                color: #00ff00;
+                font-size: 20px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                Text { text: "Yes, erase everything"; color: #ff3333; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.format-usb-confirmed(); } }
+            }
+
+            Rectangle {
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "Cancel"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.format-usb-cancelled(); } }
+            }
+        }
+    }
+
     // Right Controls (Quick Actions)
     if !is-stopmotion-mode: Rectangle {
         y: 120px;
@@ -349,7 +393,7 @@ export component AppWindow inherits Window {
             Rectangle {
                 height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
                 Text { text: "Format USB"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
-                TouchArea { clicked => { root.format-usb-clicked(); } }
+                TouchArea { clicked => { root.format-usb-requested(); } }
             }
             Rectangle {
                 height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;

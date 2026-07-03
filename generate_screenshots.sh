@@ -45,4 +45,9 @@ sed -i 's/is-gallery-mode: false/is-gallery-mode: true/' dvr_app/ui/main.slint
 capture "gallery_mode"
 sed -i 's/is-gallery-mode: true/is-gallery-mode: false/' dvr_app/ui/main.slint
 
+# 6. Format USB Confirmation
+sed -i 's/is-format-confirm-mode: false/is-format-confirm-mode: true/' dvr_app/ui/main.slint
+capture "format_confirm_mode"
+sed -i 's/is-format-confirm-mode: true/is-format-confirm-mode: false/' dvr_app/ui/main.slint
+
 echo "Screenshots generated successfully."
