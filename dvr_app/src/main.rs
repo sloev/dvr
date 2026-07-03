@@ -184,7 +184,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
     ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
     ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
-    ui.on_gallery_clicked(move || { });
 
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
