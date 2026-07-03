@@ -41,3 +41,4 @@
 - [x] **Multiple Stopmotion Projects:** Ensure multiple stopmotion projects can exist simultaneously (e.g., using separate folders per project).
 - [x] **Automated UI Screenshots:** Update CI to automatically generate screenshots of all user stories and embed them in the documentation during the release/docs refresh.
 - [x] **Fix CI "exec format error":** Add `setup-qemu-action` to `test-app` and `build-app` jobs so they can run `linux/arm64` Alpine containers on the x86_64 runners.
+- [x] Provide one-liner to fix merge conflicts.
