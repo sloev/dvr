@@ -365,7 +365,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                let _ = std::process::Command::new("killall")
+                    .arg("wpa_supplicant")
+                    .status();
+                let _ = std::process::Command::new("wpa_supplicant")
+                    .args(["-B", "-i", "wlan0", "-c", "/etc/wpa_supplicant/wpa_supplicant.conf"])
+                    .spawn();
                 
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
