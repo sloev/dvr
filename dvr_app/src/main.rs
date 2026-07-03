@@ -4,13 +4,21 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sysinfo::{System, Disks};
-use axum::{routing::get, Router};
+use sysinfo::System;
+use axum::Router;
 use tower_http::services::ServeDir;
 use chrono::Local;
+pub fn create_storage_dirs(base_path: &str) {
+    let stills_path = format!("{}/stills", base_path);
+    std::fs::create_dir_all(&stills_path).unwrap_or_default();
+}
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::process::Command;
+use gstreamer_app::AppSink;
+
+mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,11 +27,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     let ui_weak = ui.as_weak();
 
-    std::fs::create_dir_all("/mnt/dvr_storage/stills").unwrap_or_default();
+    create_storage_dirs("/mnt/dvr_storage");
 
     tokio::spawn(async {
         let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap());
+        let listener = match tokio::net::TcpListener::bind("0.0.0.0:80").await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap(),
+        };
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -35,23 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cpu = sys.global_cpu_info().cpu_usage();
             let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
             
-            let disks = Disks::new_with_refreshed_list();
-            let mut disk_usage = 0.0;
-            for disk in &disks {
-                if disk.mount_point().to_str() == Some("/mnt/dvr_storage") {
-                    disk_usage = (disk.total_space() - disk.available_space()) as f32 / disk.total_space() as f32 * 100.0;
-                }
-            }
-
-            if disk_usage > 90.0 {
-                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                    let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
-                    files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
-                    if let Some(oldest) = files.iter().find(|f| f.path().extension().unwrap_or_default() == "mp4") {
-                        let _ = std::fs::remove_file(oldest.path());
-                    }
-                }
-            }
+            let disk_usage = tokio::task::spawn_blocking(|| {
+                let mut storage_sys = crate::storage::RealStorageSystem::new();
+                crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage")
+            }).await.unwrap_or(0.0);
 
             let cpu_str = format!("{:.1}%", cpu);
             let ram_str = format!("{:.1}%", ram);
@@ -169,9 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let tag_list = gst::TagList::builder()
-                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
-                .build();
+            let mut tag_list = gst::TagList::new();
+            tag_list.get_mut().unwrap().add::<gst::tags::Comment>(&marker_text.as_str(), gst::TagMergeMode::Append);
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
@@ -180,7 +177,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
     ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
     ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
-    ui.on_gallery_clicked(move || { });
 
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
@@ -213,13 +209,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         let frame_clone = stopmotion_frame.clone();
         let proj_clone = current_stopmo_proj.clone();
-        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<AppSink>().unwrap();
         
         ui.on_stopmotion_capture_clicked(move || {
             let proj_id = proj_clone.lock().unwrap().clone();
             let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
             let _ = std::fs::create_dir_all(&proj_dir);
-            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
                     let map = buffer.map_readable().unwrap();
                     let frame_num = frame_clone.load(Ordering::SeqCst);
@@ -248,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
             
+            let value = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 if let Ok(pipe) = gst::parse::launch(&pipe_str) {
                     let p = pipe.downcast::<gst::Pipeline>().unwrap();
@@ -262,7 +259,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     p.set_state(gst::State::Null).unwrap();
                     
                     slint::invoke_from_event_loop({
-                        let ui = ui_weak_clone.clone();
+                        let ui = value.clone();
                         move || {
                             if let Some(ui) = ui.upgrade() {
                                 ui.set_notification_text(format!("Compiled {}", out_file).into());
@@ -353,16 +350,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
+            let value = ui_weak_clone.clone();
             std::thread::spawn(move || {
                 let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+                let _ = std::process::Command::new("killall")
+                    .arg("wpa_supplicant")
+                    .status();
+                let _ = std::process::Command::new("wpa_supplicant")
+                    .args(["-B", "-i", "wlan0", "-c", "/etc/wpa_supplicant/wpa_supplicant.conf"])
+                    .spawn();
                 
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 
                 slint::invoke_from_event_loop({
-                    let ui = ui_weak_clone.clone();
+                    let ui = value.clone();
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
@@ -418,4 +421,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn test_create_storage_dirs_permission_denied() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let base_path = temp_dir.path().to_str().unwrap();
+
+        let mut perms = std::fs::metadata(base_path).unwrap().permissions();
+        perms.set_mode(0o500); // r-x------
+        std::fs::set_permissions(base_path, perms).unwrap();
+
+        create_storage_dirs(base_path);
+
+        let mut perms = std::fs::metadata(base_path).unwrap().permissions();
+        perms.set_mode(0o700); // rwx------
+        std::fs::set_permissions(base_path, perms).unwrap();
+    }
 }
