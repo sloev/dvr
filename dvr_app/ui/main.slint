@@ -1,3 +1,11 @@
+import { LineEdit } from "std-widgets.slint";
+
+export struct VideoItem {
+    image_path: image,
+    filename: string,
+    path: string,
+}
+
 export component AppWindow inherits Window {
     width: 1920px;
     height: 1080px;
@@ -16,8 +24,10 @@ export component AppWindow inherits Window {
 
     in property <bool> is-wifi-mode: false;
     in property <bool> is-settings-mode: false;
-    in property <string> wifi-ssid: "";
-    in property <string> wifi-password: "";
+    in property <bool> is-gallery-mode: false;
+    out property <string> wifi-ssid: "";
+    out property <string> wifi-password: "";
+    in property <[VideoItem]> video-items: [];
 
     callback record-clicked();
     callback stop-clicked();
@@ -30,7 +40,7 @@ export component AppWindow inherits Window {
     callback toggle-stopmotion-clicked();
     callback stopmotion-capture-clicked();
     callback stopmotion-compile-clicked();
-    callback play-video-clicked();
+    callback play-video-clicked(string);
     callback wifi-settings-clicked();
     callback connect-wifi-clicked();
     callback capture-settings-clicked();
@@ -44,6 +54,8 @@ export component AppWindow inherits Window {
         height: 80px;
         background: #00000080;
         border-radius: 10px;
+        border-width: 1px;
+        border-color: #00ff00;
 
         HorizontalLayout {
             padding: 20px;
@@ -59,7 +71,7 @@ export component AppWindow inherits Window {
                 }
                 Text {
                     text: is-stopmotion-mode ? "STOPMOTION: " + stopmotion-frame-count + " frames" : (is-recording ? "REC " + recording-time : "READY");
-                    color: white;
+                    color: #00ff00;
                     font-size: 32px;
                     font-weight: 800;
                     vertical-alignment: center;
@@ -77,25 +89,25 @@ export component AppWindow inherits Window {
                 // Audio Meter
                 HorizontalLayout {
                     spacing: 10px;
-                    Text { text: "MIC:"; color: white; font-size: 24px; vertical-alignment: center; }
+                    Text { text: "MIC:"; color: #00ff00; font-size: 24px; vertical-alignment: center; }
                     Rectangle {
                         width: 150px;
                         height: 30px;
-                        background: #333;
+                        background: #111;
                         border-radius: 5px;
                         Rectangle {
                             width: 150px * audio-level;
                             height: 30px;
                             background: audio-level > 0.8 ? red : (audio-level > 0.5 ? yellow : green);
                             border-radius: 5px;
-
+                            animate width { duration: 100ms; easing: linear; }
                         }
                     }
                 }
-                Text { text: "CPU: " + cpu-load; color: white; font-size: 24px; vertical-alignment: center; }
-                Text { text: "RAM: " + ram-usage; color: white; font-size: 24px; vertical-alignment: center; }
-                Text { text: "DISK: " + disk-usage; color: white; font-size: 24px; vertical-alignment: center; }
-                Text { text: fps-text; color: white; font-size: 24px; vertical-alignment: center; }
+                Text { text: "CPU: " + cpu-load; color: #00ff00; font-size: 24px; vertical-alignment: center; }
+                Text { text: "RAM: " + ram-usage; color: #00ff00; font-size: 24px; vertical-alignment: center; }
+                Text { text: "DISK: " + disk-usage; color: #00ff00; font-size: 24px; vertical-alignment: center; }
+                Text { text: fps-text; color: #00ff00; font-size: 24px; vertical-alignment: center; }
             }
         }
     }
@@ -104,30 +116,25 @@ export component AppWindow inherits Window {
         y: 120px;
         x: 20px;
         width: 250px;
-        height: 400px;
+        height: 320px;
         background: transparent;
-        
+
         VerticalLayout {
             spacing: 20px;
-            
+
             Rectangle {
-                height: 80px; background: #444; border-radius: 40px;
-                Text { text: "🎬 Stopmotion"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "🎬 Stopmotion"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.toggle-stopmotion-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #444; border-radius: 40px;
-                Text { text: "▶ Play Video"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
-                TouchArea { clicked => { root.play-video-clicked(); } }
-            }
-            Rectangle {
-                height: 80px; background: #444; border-radius: 40px;
-                Text { text: "📶 Wi-Fi Client"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "📶 Wi-Fi Client"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.wifi-settings-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #444; border-radius: 40px;
-                Text { text: "⚙ Settings"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "⚙ Settings"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.capture-settings-clicked(); } }
             }
         }
@@ -139,73 +146,179 @@ export component AppWindow inherits Window {
         width: 250px;
         height: 400px;
         background: transparent;
-        
+
         VerticalLayout {
             spacing: 20px;
-            
+
             Rectangle {
-                height: 80px; background: #ff3333; border-radius: 40px;
-                Text { text: "Exit Stopmo"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                Text { text: "Exit Stopmo"; color: #ff3333; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.toggle-stopmotion-clicked(); } }
             }
         }
     }
 
-    if is-settings-mode: Rectangle {
-        y: 120px;
+    // Gallery Panel
+    Rectangle {
+        y: is-gallery-mode ? 120px : -1000px;
         x: 300px;
-        width: 600px;
-        height: 400px;
-        background: #333333f0;
+        width: 1320px;
+        height: 800px;
+        background: #111111f0;
         border-radius: 20px;
-        
+        border-width: 2px;
+        border-color: #00ff00;
+        opacity: is-gallery-mode ? 1.0 : 0.0;
+        animate y { duration: 300ms; easing: ease-in-out; }
+        animate opacity { duration: 300ms; easing: ease-in-out; }
+
         VerticalLayout {
             padding: 20px;
             spacing: 20px;
-            
-            Text { text: "Capture Settings"; color: white; font-size: 32px; horizontal-alignment: center; }
-            
-            Text { text: "Resolution: 1920x1080 -> 1280x720"; color: white; font-size: 24px; }
-            
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text { text: "Gallery"; color: #00ff00; font-size: 32px; }
+                Rectangle {
+                    width: 100px; height: 50px; background: #111; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                    Text { text: "Close"; color: #ff3333; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { clicked => { root.gallery-clicked(); } }
+                }
+            }
+
+            Flickable {
+                width: 100%;
+                height: 100%;
+
+                HorizontalLayout {
+                    spacing: 20px;
+                    for item in root.video-items: Rectangle {
+                        width: 320px;
+                        height: 240px;
+                        background: ta.pressed ? #333333 : #222222a0;
+                        border-radius: 10px;
+                        border-width: 2px;
+                        border-color: #00ff00;
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 10px;
+
+                            Image {
+                                source: item.image_path;
+                                width: 300px;
+                                height: 168px;
+                                image-fit: cover;
+                            }
+
+                            Text {
+                                text: item.filename;
+                                color: #00ff00;
+                                font-size: 16px;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        ta := TouchArea {
+                            clicked => {
+                                root.play-video-clicked(item.path);
+                                root.gallery-clicked();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Capture Settings Panel
+    Rectangle {
+        y: is-settings-mode ? 120px : -500px;
+        x: 300px;
+        width: 600px;
+        height: 400px;
+        background: #111111f0;
+        border-radius: 20px;
+        border-width: 2px;
+        border-color: #00ff00;
+        opacity: is-settings-mode ? 1.0 : 0.0;
+        animate y { duration: 300ms; easing: ease-in-out; }
+        animate opacity { duration: 300ms; easing: ease-in-out; }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 20px;
+
+            Text { text: "Capture Settings"; color: #00ff00; font-size: 32px; horizontal-alignment: center; }
+
+            Text { text: "Resolution: 1920x1080 -> 1280x720"; color: #00ff00; font-size: 24px; }
+
             Rectangle {
-                height: 80px; background: #555; border-radius: 20px;
-                Text { text: "Apply (Restart Required)"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "Apply (Restart Required)"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.apply-settings-clicked(); } }
             }
-            
+
             Rectangle {
-                height: 80px; background: #ff3333; border-radius: 20px;
-                Text { text: "Cancel"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                Text { text: "Cancel"; color: #ff3333; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.capture-settings-clicked(); } }
             }
         }
     }
 
-    if is-wifi-mode: Rectangle {
-        y: 120px;
+    // Wi-Fi Client Panel
+    Rectangle {
+        y: is-wifi-mode ? 120px : -500px;
         x: 300px;
         width: 600px;
         height: 400px;
-        background: #333333f0;
+        background: #111111f0;
         border-radius: 20px;
-        
+        border-width: 2px;
+        border-color: #00ff00;
+        opacity: is-wifi-mode ? 1.0 : 0.0;
+        animate y { duration: 300ms; easing: ease-in-out; }
+        animate opacity { duration: 300ms; easing: ease-in-out; }
+
         VerticalLayout {
             padding: 20px;
             spacing: 20px;
-            
-            Text { text: "Wi-Fi Settings"; color: white; font-size: 32px; horizontal-alignment: center; }
-            
-            Text { text: "SSID: (Hardcoded for demo)"; color: white; font-size: 24px; }
-            
+
+            Text { text: "Wi-Fi Settings"; color: #00ff00; font-size: 32px; horizontal-alignment: center; }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "SSID:"; color: #00ff00; font-size: 24px; vertical-alignment: center; }
+                LineEdit {
+                    text: root.wifi-ssid;
+                    font-size: 24px;
+                    accepted => { root.wifi-ssid = self.text; }
+                    edited => { root.wifi-ssid = self.text; }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "Password:"; color: #00ff00; font-size: 24px; vertical-alignment: center; }
+                LineEdit {
+                    text: root.wifi-password;
+                    font-size: 24px;
+                    input-type: password;
+                    accepted => { root.wifi-password = self.text; }
+                    edited => { root.wifi-password = self.text; }
+                }
+            }
+
             Rectangle {
-                height: 80px; background: #555; border-radius: 20px;
-                Text { text: "Connect to Network"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "Connect to Network"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.connect-wifi-clicked(); } }
             }
-            
+
             Rectangle {
-                height: 80px; background: #ff3333; border-radius: 20px;
-                Text { text: "Cancel"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                Text { text: "Cancel"; color: #ff3333; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.wifi-settings-clicked(); } }
             }
         }
@@ -219,33 +332,33 @@ export component AppWindow inherits Window {
         width: 200px;
         height: 400px;
         background: transparent;
-        
+
         VerticalLayout {
             spacing: 20px;
-            
+
             Rectangle {
-                height: 80px; background: #555; border-radius: 40px;
-                Text { text: "📷 Still"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "📷 Still"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.capture-still-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #555; border-radius: 40px;
-                Text { text: "⊕ Marker"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "⊕ Marker"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.add-marker-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #800000; border-radius: 40px;
-                Text { text: "Format USB"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "Format USB"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.format-usb-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #888; border-radius: 40px;
-                Text { text: "⏏ Eject"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #00ff00;
+                Text { text: "⏏ Eject"; color: #00ff00; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.eject-usb-clicked(); } }
             }
             Rectangle {
-                height: 80px; background: #ff3333; border-radius: 40px;
-                Text { text: "⏻ Power"; color: white; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 80px; background: #111111a0; border-radius: 10px; border-width: 1px; border-color: #ff3333;
+                Text { text: "⏻ Power"; color: #ff3333; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.shutdown-clicked(); } }
             }
         }
@@ -266,27 +379,30 @@ export component AppWindow inherits Window {
             Rectangle {
                 width: 200px;
                 height: 100px;
-                background: is-recording ? gray : #ff3333;
-                border-radius: 50px;
-                Text { text: "Record"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                background: is-recording ? gray : #111;
+                border-radius: 10px;
+                border-width: 2px; border-color: #ff3333;
+                Text { text: "Record"; color: #ff3333; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.record-clicked(); } }
             }
 
             Rectangle {
                 width: 200px;
                 height: 100px;
-                background: !is-recording ? gray : #ff9900;
-                border-radius: 50px;
-                Text { text: "Stop"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                background: !is-recording ? gray : #111;
+                border-radius: 10px;
+                border-width: 2px; border-color: #ff9900;
+                Text { text: "Stop"; color: #ff9900; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.stop-clicked(); } }
             }
 
             Rectangle {
                 width: 200px;
                 height: 100px;
-                background: #3399ff;
-                border-radius: 50px;
-                Text { text: "Gallery"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                background: #111;
+                border-radius: 10px;
+                border-width: 2px; border-color: #3399ff;
+                Text { text: "Gallery"; color: #3399ff; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.gallery-clicked(); } }
             }
         }
@@ -307,18 +423,20 @@ export component AppWindow inherits Window {
             Rectangle {
                 width: 300px;
                 height: 100px;
-                background: #ff9900;
-                border-radius: 50px;
-                Text { text: "Capture Frame"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                background: #111;
+                border-radius: 10px;
+                border-width: 2px; border-color: #ff9900;
+                Text { text: "Capture Frame"; color: #ff9900; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.stopmotion-capture-clicked(); } }
             }
 
             Rectangle {
                 width: 300px;
                 height: 100px;
-                background: #3399ff;
-                border-radius: 50px;
-                Text { text: "Compile Video"; color: white; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                background: #111;
+                border-radius: 10px;
+                border-width: 2px; border-color: #3399ff;
+                Text { text: "Compile Video"; color: #3399ff; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
                 TouchArea { clicked => { root.stopmotion-compile-clicked(); } }
             }
         }

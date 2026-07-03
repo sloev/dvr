@@ -41,3 +41,11 @@
 - [x] **Multiple Stopmotion Projects:** Ensure multiple stopmotion projects can exist simultaneously (e.g., using separate folders per project).
 - [x] **Automated UI Screenshots:** Update CI to automatically generate screenshots of all user stories and embed them in the documentation during the release/docs refresh.
 - [x] **Fix CI "exec format error":** Add `setup-qemu-action` to `test-app` and `build-app` jobs so they can run `linux/arm64` Alpine containers on the x86_64 runners.
+
+## ✅ DONE: Consolidated Polish Pass
+- [x] **Wi-Fi Mode Hardening:** Replaced hardcoded demo credentials with Slint `LineEdit` inputs for SSID/password, wired to a testable `write_wifi_config` helper.
+- [x] **UI Aesthetics:** Applied an 80s/90s "hackerman" retro theme (neon green on black, glowing borders, slide-in animations).
+- [x] **Gallery Navigation:** Added a scrollable Gallery Grid UI that reads `/mnt/dvr_storage/`, lists recordings, and plays the selected file.
+- [x] **`/gallery` HTTP endpoint authentication:** Added HTTP Basic Auth (`GALLERY_PASSWORD` env var) to prevent unauthenticated access to recorded media.
+- [x] **Storage perf:** Reused a single `RealStorageSystem` across telemetry ticks instead of recreating it every second, and switched to `sort_by_cached_key` to avoid redundant `stat` syscalls when sweeping old recordings.
+- [x] **Test coverage:** Added unit tests for `create_storage_dirs`, `setup_stopmotion_dir`, and `write_wifi_config`.
