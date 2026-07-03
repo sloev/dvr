@@ -4,15 +4,13 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sysinfo::System;
-use axum::Router;
+use sysinfo::{System, Disks};
+use axum::{routing::get, Router};
 use tower_http::services::ServeDir;
 use chrono::Local;
 use std::io::Write;
 use futures::stream::StreamExt;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-
-mod storage;
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, AtomicBool, Ordering}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async {
         let app = Router::new().nest_service("/gallery", ServeDir::new("/mnt/dvr_storage"));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| futures::executor::block_on(tokio::net::TcpListener::bind("127.0.0.1:8080")).unwrap());
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap_or_else(|_| tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap());
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -36,11 +34,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sys.refresh_all();
             let cpu = sys.global_cpu_info().cpu_usage();
             let ram = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
-            
-            let disk_usage = tokio::task::spawn_blocking(|| {
-                let mut storage_sys = crate::storage::RealStorageSystem::new();
-                crate::storage::manage_storage(&mut storage_sys, "/mnt/dvr_storage")
-            }).await.unwrap_or(0.0);
+
+            let disks = Disks::new_with_refreshed_list();
+            let mut disk_usage = 0.0;
+            for disk in &disks {
+                if disk.mount_point().to_str() == Some("/mnt/dvr_storage") {
+                    disk_usage = (disk.total_space() - disk.available_space()) as f32 / disk.total_space() as f32 * 100.0;
+                }
+            }
+
+            if disk_usage > 90.0 {
+                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                    let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
+                    files.sort_by_key(|a| a.metadata().unwrap().modified().unwrap());
+                    if let Some(oldest) = files.iter().find(|f| f.path().extension().unwrap_or_default() == "mp4") {
+                        let _ = std::fs::remove_file(oldest.path());
+                    }
+                }
+            }
 
             let cpu_str = format!("{:.1}%", cpu);
             let ram_str = format!("{:.1}%", ram);
@@ -64,20 +75,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pipeline with level element for audio metering
     let pipeline_str = "
         splitmuxsink location=/mnt/dvr_storage/dvr_%05d.mp4 max-size-bytes=1000000000 name=mux
-        v4l2src device=/dev/video0 ! video/x-raw,format=UYVY,width=1920,height=1080,framerate=30/1 ! tee name=t 
-        t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true 
+        v4l2src device=/dev/video0 ! video/x-raw,format=UYVY,width=1920,height=1080,framerate=30/1 ! tee name=t
+        t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true
         t. ! queue name=rec_queue ! v4l2h264enc extra-controls=\"encode,video_bitrate=10000000\" ! h264parse ! mux.video
         alsasrc device=hw:1 ! level name=audiometer message=true interval=100000000 ! audioconvert ! voaacenc ! mux.audio_0
         t. ! queue leaky=2 max-size-buffers=1 ! videoconvert ! jpegenc ! appsink name=snap_sink max-buffers=1 drop=true
     ";
-    
+
     let pipeline = gst::parse::launch(pipeline_str)?
         .downcast::<gst::Pipeline>()
         .expect("Expected a pipeline");
 
     let bus = pipeline.bus().unwrap();
     let ui_audio = ui_weak.clone();
-    
+
     // Polling GStreamer Bus for Audio Levels
     tokio::spawn(async move {
         let mut bus_stream = bus.stream();
@@ -158,50 +169,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/mnt/dvr_storage/markers.txt") {
                 let _ = writeln!(file, "{}", marker_text);
             }
-            let mut tag_list = gst::TagList::new();
-            tag_list.get_mut().unwrap();
-            //
-            // .build()
-
-
+            let tag_list = gst::TagList::builder()
+                .add::<gst::tags::Comment>(marker_text.as_str(), gst::TagMergeMode::Append)
+                .build();
             pipeline_clone.send_event(gst::event::Tag::new(tag_list));
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("⊕ marker added & tagged".into()); }
         });
     }
 
-    ui.on_format_usb_clicked(move || { let _ = std::process::Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
-    ui.on_eject_usb_clicked(move || { let _ = std::process::Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
-    ui.on_shutdown_clicked(move || { let _ = std::process::Command::new("poweroff").spawn(); });
-    let gallery_mode = Arc::new(AtomicBool::new(false));
-    {
-        let ui_weak_clone = ui_weak.clone();
-        let gallery_clone = gallery_mode.clone();
-        ui.on_gallery_clicked(move || {
-            let current = gallery_clone.load(Ordering::SeqCst);
-            gallery_clone.store(!current, Ordering::SeqCst);
-            if let Some(ui) = ui_weak_clone.upgrade() {
-                ui.set_is_gallery_mode(!current);
-                if !current {
-                    let mut items = Vec::new();
-                    if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
-                        for entry in entries.filter_map(|e| e.ok()) {
-                            let path = entry.path();
-                            if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
-                                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                                let thumb_path = "/mnt/dvr_storage/stills/placeholder.jpg";
-                                let img = slint::Image::load_from_path(std::path::Path::new(thumb_path)).unwrap_or_default();
-                                items.push(VideoItem { image_path: img, filename: filename.into(), path: path.to_string_lossy().to_string().into() });
-                            }
-                        }
-                    }
-                    // Sort items to show newest first
-                    items.sort_by(|a, b| b.filename.cmp(&a.filename));
-                    let model = std::rc::Rc::new(slint::VecModel::from(items));
-                    ui.set_video_items(model.into());
-                }
-            }
-        });
-    }
+    ui.on_format_usb_clicked(move || { let _ = Command::new("mkfs.f2fs").arg("-f").arg("/dev/mmcblk0p3").spawn(); });
+    ui.on_eject_usb_clicked(move || { let _ = Command::new("umount").arg("/mnt/dvr_storage").spawn(); });
+    ui.on_shutdown_clicked(move || { let _ = Command::new("poweroff").spawn(); });
+    ui.on_gallery_clicked(move || { });
 
     // Advanced Features
     let stopmotion_mode = Arc::new(AtomicBool::new(false));
@@ -234,16 +213,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         let frame_clone = stopmotion_frame.clone();
         let proj_clone = current_stopmo_proj.clone();
-        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gstreamer_app::AppSink>().unwrap();
-        
+        let snap_sink = pipeline.by_name("snap_sink").unwrap().downcast::<gst_app::AppSink>().unwrap();
+
         ui.on_stopmotion_capture_clicked(move || {
             let proj_id = proj_clone.lock().unwrap().clone();
             let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
             let _ = std::fs::create_dir_all(&proj_dir);
-            if let Some(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            if let Ok(sample) = snap_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
                 if let Some(buffer) = sample.buffer() {
-                    if let Ok(map) = buffer.map_readable() {
-
+                    let map = buffer.map_readable().unwrap();
                     let frame_num = frame_clone.load(Ordering::SeqCst);
                     let filepath = format!("{}/frame_{:04}.jpg", proj_dir, frame_num);
                     if let Ok(mut file) = std::fs::File::create(&filepath) {
@@ -256,7 +234,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-                }
         });
     }
 
@@ -268,10 +245,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let proj_dir = format!("/mnt/dvr_storage/stopmo_proj_{}", proj_id);
             let out_file = format!("/mnt/dvr_storage/stopmo_proj_{}.mp4", proj_id);
             let pipe_str = format!("multifilesrc location={}/frame_%04d.jpg index=1 caps=\"image/jpeg,framerate=10/1\" ! jpegdec ! videoconvert ! v4l2h264enc ! h264parse ! mp4mux ! filesink location={}", proj_dir, out_file);
-            
+
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Compiling Stopmotion...".into()); }
-            
-            let ui_weak_clone = ui_weak_clone.clone();
+
             std::thread::spawn(move || {
                 if let Ok(pipe) = gst::parse::launch(&pipe_str) {
                     let p = pipe.downcast::<gst::Pipeline>().unwrap();
@@ -284,7 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     p.set_state(gst::State::Null).unwrap();
-                    
+
                     slint::invoke_from_event_loop({
                         let ui = ui_weak_clone.clone();
                         move || {
@@ -301,37 +277,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak_clone = ui_weak.clone();
         let pipeline_clone = pipeline.clone();
-        ui.on_play_video_clicked(move |file_path: slint::SharedString| {
+        ui.on_play_video_clicked(move || {
             let p_clone = pipeline_clone.clone();
             let ui_clone = ui_weak_clone.clone();
-            let file_path = file_path.to_string();
             std::thread::spawn(move || {
-                p_clone.set_state(gst::State::Null).unwrap();
-                slint::invoke_from_event_loop({
-                    let u = ui_clone.clone();
-                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
-                }).unwrap();
-
-                let uri = format!("file://{}", file_path);
-                if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
-                    let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
-                    playbin.set_state(gst::State::Playing).unwrap();
-                    if let Some(bus) = playbin.bus() {
-                        for msg in bus.iter_timed(gst::ClockTime::NONE) {
-                            match msg.view() {
-                                gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
-                                _ => (),
+                if let Ok(entries) = std::fs::read_dir("/mnt/dvr_storage") {
+                    let mut latest_file = None;
+                    let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
+                            if let Ok(metadata) = entry.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    if modified > latest_time {
+                                        latest_time = modified;
+                                        latest_file = Some(path);
+                                    }
+                                }
                             }
                         }
                     }
-                    playbin.set_state(gst::State::Null).unwrap();
-                }
 
-                p_clone.set_state(gst::State::Playing).unwrap();
-                slint::invoke_from_event_loop({
-                    let u = ui_clone.clone();
-                    move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
-                }).unwrap();
+                    if let Some(file_path) = latest_file {
+                        p_clone.set_state(gst::State::Null).unwrap();
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playing...".into()); } }
+                        }).unwrap();
+
+                        let uri = format!("file://{}", file_path.display());
+                        if let Ok(pipe) = gst::parse::launch(&format!("playbin uri={} video-sink=\"kmssink force-modesetting=true\"", uri)) {
+                            let playbin = pipe.downcast::<gst::Pipeline>().unwrap();
+                            playbin.set_state(gst::State::Playing).unwrap();
+                            if let Some(bus) = playbin.bus() {
+                                for msg in bus.iter_timed(gst::ClockTime::NONE) {
+                                    match msg.view() {
+                                        gst::MessageView::Eos(..) | gst::MessageView::Error(..) => break,
+                                        _ => (),
+                                    }
+                                }
+                            }
+                            playbin.set_state(gst::State::Null).unwrap();
+                        }
+
+                        p_clone.set_state(gst::State::Playing).unwrap();
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("Playback Finished".into()); } }
+                        }).unwrap();
+                    } else {
+                        slint::invoke_from_event_loop({
+                            let u = ui_clone.clone();
+                            move || { if let Some(u) = u.upgrade() { u.set_notification_text("No videos to play".into()); } }
+                        }).unwrap();
+                    }
+                }
             });
         });
     }
@@ -353,26 +353,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak_clone = ui_weak.clone();
         ui.on_connect_wifi_clicked(move || {
             if let Some(ui) = ui_weak_clone.upgrade() { ui.set_notification_text("Connecting to Wi-Fi...".into()); }
-            let ui_weak_clone = ui_weak_clone.clone();
             std::thread::spawn(move || {
-                let ssid = ui_weak_clone.upgrade().unwrap().get_wifi_ssid(); let password = ui_weak_clone.upgrade().unwrap().get_wifi_password(); let conf = format!("network={{\n  ssid=\"{ssid}\"\n  psk=\"{password}\"\n}}\n");
+                let conf = "network={\n  ssid=\"DemoNetwork\"\n  psk=\"password123\"\n}\n";
                 let _ = std::fs::create_dir_all("/etc/wpa_supplicant");
                 let _ = std::fs::write("/etc/wpa_supplicant/wpa_supplicant.conf", conf);
-                let _ = std::process::Command::new("killall")
-                    .arg("wpa_supplicant")
-                    .status();
-                let _ = std::process::Command::new("wpa_supplicant")
-                    .args(["-B", "-i", "wlan0", "-c", "/etc/wpa_supplicant/wpa_supplicant.conf"])
-                    .spawn();
-                
+                let _ = std::process::Command::new("sh").arg("-c").arg("killall wpa_supplicant; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf").spawn();
+
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                
+
                 slint::invoke_from_event_loop({
                     let ui = ui_weak_clone.clone();
                     move || {
                         if let Some(ui) = ui.upgrade() {
                             ui.set_is_wifi_mode(false);
-                            ui.set_notification_text("Connected to Wi-Fi".into());
+                            ui.set_notification_text("Connected to DemoNetwork".into());
                         }
                     }
                 }).unwrap();
@@ -403,7 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_is_settings_mode(false);
             }
             settings_clone.store(false, Ordering::SeqCst);
-            
+
             // To change resolution robustly on a running v4l2src, we need to rebuild the pipeline.
             // For now, we will just restart the existing pipeline to prove dynamic control works.
             let p_clone = pipeline_clone.clone();
@@ -412,7 +406,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 p_clone.set_state(gst::State::Null).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 p_clone.set_state(gst::State::Playing).unwrap();
-                
+
                 slint::invoke_from_event_loop(move || {
                     if let Some(ui) = u_clone.upgrade() {
                         ui.set_notification_text("Pipeline restarted with new settings".into());
