@@ -2,8 +2,43 @@
 set -e
 
 VERSION=${VERSION:-"latest"}
+# TARGET_BOARD selects capture tuning for the two 64-bit-capable board
+# families this project supports: Raspberry Pi 2 v1.2 and Pi 3 share the
+# BCM2837 SoC (VideoCore IV GPU), while Pi 4 uses BCM2711 (VideoCore VI).
+# The rootfs/kernel/packages are identical either way - Alpine's aarch64
+# linux-rpi kernel enables CONFIG_ARCH_BCM2835, the shared umbrella config
+# covering the whole Broadcom Pi SoC family via device-tree, the same way
+# Raspberry Pi OS ships one kernel image across these boards - but neither
+# path has been run on real hardware, so this produces two distinctly
+# tuned images rather than betting everything on one.
+TARGET_BOARD=${TARGET_BOARD:-"pi4"}
+case "$TARGET_BOARD" in
+    pi4)
+        CAPTURE_WIDTH=1920
+        CAPTURE_HEIGHT=1080
+        CAPTURE_FPS=30
+        CAPTURE_BITRATE=10000000
+        ;;
+    pi2-3)
+        # Conservative starting point for the weaker VideoCore IV / Cortex-A53
+        # boards - the H264 encode block itself is spec'd for 1080p30 on
+        # these too, but the surrounding CPU/software stack (UI, thumbnailing,
+        # audio encode) has much less headroom than Pi 4. Easy to raise via
+        # DVR_CAPTURE_* env vars once validated on real hardware.
+        CAPTURE_WIDTH=1280
+        CAPTURE_HEIGHT=720
+        CAPTURE_FPS=30
+        CAPTURE_BITRATE=6000000
+        ;;
+    *)
+        echo "ERROR: Unknown TARGET_BOARD '$TARGET_BOARD' (expected 'pi4' or 'pi2-3')"
+        exit 1
+        ;;
+esac
+
 echo "Starting Alpine OS Build for Raspberry Pi (aarch64) - DVR Edition..."
 echo "Version: $VERSION"
+echo "Target board: $TARGET_BOARD (${CAPTURE_WIDTH}x${CAPTURE_HEIGHT}@${CAPTURE_FPS}, ${CAPTURE_BITRATE}bps)"
 
 # Configuration
 # Target architecture is aarch64: alpine-make-rootfs v0.7.0 has no --arch
@@ -13,10 +48,14 @@ echo "Version: $VERSION"
 ALPINE_BRANCH="edge"
 MIRROR="http://dl-cdn.alpinelinux.org/alpine"
 ROOTFS_DIR="rootfs"
-IMG_FILE="dvr_alpine_aarch64_${VERSION}.img"
+IMG_FILE="dvr_alpine_aarch64_${TARGET_BOARD}_${VERSION}.img"
 
 # Required packages
 PACKAGES="alpine-base linux-rpi raspberrypi-bootloader v4l-utils libdrm mesa-egl mesa-gles mesa-gbm mesa-dri-gallium gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad libinput eudev libseat libxkbcommon pkgconf fontconfig-dev openrc hostapd dnsmasq util-linux e2fsprogs f2fs-tools wpa_supplicant"
+
+# Exported so the (quoted, non-interpolating) chroot script below can read
+# them back out of its inherited environment when it actually runs.
+export TARGET_BOARD CAPTURE_WIDTH CAPTURE_HEIGHT CAPTURE_FPS CAPTURE_BITRATE
 
 echo "Downloading alpine-make-rootfs..."
 wget -qO alpine-make-rootfs https://raw.githubusercontent.com/alpinelinux/alpine-make-rootfs/v0.7.0/alpine-make-rootfs
@@ -51,6 +90,26 @@ echo "dtoverlay=vc4-kms-v3d" >> /boot/config.txt
 echo "dtoverlay=tc358743" >> /boot/config.txt
 echo "gpu_mem=256" >> /boot/config.txt
 echo "quiet loglevel=1 vt.global_cursor_default=0 root=/dev/mmcblk0p2 rootfstype=ext4 ro rootwait" > /boot/cmdline.txt
+
+# Per-board capture tuning (see TARGET_BOARD in build_os.sh), read by
+# dvr_app at startup via the launcher wrapper below.
+cat > /etc/dvr_app.env << ENVEOF
+DVR_CAPTURE_WIDTH=$CAPTURE_WIDTH
+DVR_CAPTURE_HEIGHT=$CAPTURE_HEIGHT
+DVR_CAPTURE_FPS=$CAPTURE_FPS
+DVR_CAPTURE_BITRATE=$CAPTURE_BITRATE
+ENVEOF
+echo "Rendered /etc/dvr_app.env:"
+cat /etc/dvr_app.env
+
+cat > /usr/local/bin/dvr_app_launch.sh << 'LAUNCH'
+#!/bin/sh
+set -a
+. /etc/dvr_app.env
+set +a
+exec /usr/local/bin/dvr_app
+LAUNCH
+chmod +x /usr/local/bin/dvr_app_launch.sh
 
 # Create CSI-2 bridge initialization init script
 cat > /etc/init.d/csi2-bridge << 'INIT'
@@ -89,8 +148,9 @@ SPLASH
 chmod +x /etc/init.d/fbsplash
 rc-update add fbsplash boot
 
-# Replace getty with DVR app
-sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app/' /etc/inittab
+# Replace getty with DVR app (via a wrapper that loads per-board capture
+# tuning from /etc/dvr_app.env first)
+sed -i 's/^tty1::respawn:\/sbin\/getty 38400 tty1/tty1::respawn:\/usr\/local\/bin\/dvr_app_launch.sh/' /etc/inittab
 
 # Setup Read-Only rootfs fstab
 cat > /etc/fstab << 'FSTAB'
