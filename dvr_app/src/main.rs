@@ -81,6 +81,33 @@ fn get_or_create_gallery_password_at(storage_base_path: &str, env_override: Opti
     (generated, true)
 }
 
+struct CaptureSettings {
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate: u32,
+}
+
+impl Default for CaptureSettings {
+    fn default() -> Self {
+        Self { width: 1920, height: 1080, fps: 30, bitrate: 10_000_000 }
+    }
+}
+
+/// Reads DVR_CAPTURE_{WIDTH,HEIGHT,FPS,BITRATE} via the given lookup
+/// function, falling back to the 1080p30 default for anything unset or
+/// unparseable. Takes a lookup function rather than reading std::env
+/// directly so it can be unit tested without mutating process-global state.
+fn capture_settings_from_env(get_var: impl Fn(&str) -> Option<String>) -> CaptureSettings {
+    let default = CaptureSettings::default();
+    CaptureSettings {
+        width: get_var("DVR_CAPTURE_WIDTH").and_then(|v| v.parse().ok()).unwrap_or(default.width),
+        height: get_var("DVR_CAPTURE_HEIGHT").and_then(|v| v.parse().ok()).unwrap_or(default.height),
+        fps: get_var("DVR_CAPTURE_FPS").and_then(|v| v.parse().ok()).unwrap_or(default.fps),
+        bitrate: get_var("DVR_CAPTURE_BITRATE").and_then(|v| v.parse().ok()).unwrap_or(default.bitrate),
+    }
+}
+
 // wpa_supplicant's config format is line-based and supports C-style escape
 // sequences inside quoted strings, so a raw newline/CR in the input must be
 // escaped rather than passed through - otherwise it terminates the current
@@ -215,17 +242,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Capture settings are configurable so the same binary can be tuned
+    // per board: Raspberry Pi 2 v1.2/3 (VideoCore IV) have much less GPU
+    // and memory bandwidth than Pi 4 (VideoCore VI) and may not sustain
+    // full 1080p30, so the OS image sets these env vars per target board
+    // (see build_os.sh) rather than requiring a separate compiled binary.
+    let capture = capture_settings_from_env(|k| std::env::var(k).ok());
+
     // Pipeline with level element for audio metering
-    let pipeline_str = "
+    let pipeline_str = format!("
         splitmuxsink location=/mnt/dvr_storage/dvr_%05d.mp4 max-size-bytes=1000000000 name=mux
-        v4l2src device=/dev/video0 ! video/x-raw,format=UYVY,width=1920,height=1080,framerate=30/1 ! tee name=t 
-        t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true 
-        t. ! queue name=rec_queue ! v4l2h264enc extra-controls=\"encode,video_bitrate=10000000\" ! h264parse ! mux.video
+        v4l2src device=/dev/video0 ! video/x-raw,format=UYVY,width={},height={},framerate={}/1 ! tee name=t
+        t. ! queue max-size-buffers=2 drop=true ! kmssink force-modesetting=true
+        t. ! queue name=rec_queue ! v4l2h264enc extra-controls=\"encode,video_bitrate={}\" ! h264parse ! mux.video
         alsasrc device=hw:1 ! level name=audiometer message=true interval=100000000 ! audioconvert ! voaacenc ! mux.audio_0
         t. ! queue leaky=2 max-size-buffers=1 ! videoconvert ! jpegenc ! appsink name=snap_sink max-buffers=1 drop=true
-    ";
-    
-    let pipeline = gst::parse::launch(pipeline_str)?
+    ", capture.width, capture.height, capture.fps, capture.bitrate);
+
+    let pipeline = gst::parse::launch(&pipeline_str)?
         .downcast::<gst::Pipeline>()
         .expect("Expected a pipeline");
 
@@ -861,5 +895,38 @@ mod tests {
         let b = generate_random_password(16);
         assert_eq!(a.len(), 16);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_capture_settings_defaults_to_1080p30_when_unset() {
+        let settings = capture_settings_from_env(|_| None);
+        assert_eq!(settings.width, 1920);
+        assert_eq!(settings.height, 1080);
+        assert_eq!(settings.fps, 30);
+        assert_eq!(settings.bitrate, 10_000_000);
+    }
+
+    #[test]
+    fn test_capture_settings_reads_pi2_3_style_overrides() {
+        let settings = capture_settings_from_env(|k| match k {
+            "DVR_CAPTURE_WIDTH" => Some("1280".to_string()),
+            "DVR_CAPTURE_HEIGHT" => Some("720".to_string()),
+            "DVR_CAPTURE_FPS" => Some("30".to_string()),
+            "DVR_CAPTURE_BITRATE" => Some("6000000".to_string()),
+            _ => None,
+        });
+        assert_eq!(settings.width, 1280);
+        assert_eq!(settings.height, 720);
+        assert_eq!(settings.fps, 30);
+        assert_eq!(settings.bitrate, 6_000_000);
+    }
+
+    #[test]
+    fn test_capture_settings_falls_back_on_unparseable_value() {
+        let settings = capture_settings_from_env(|k| match k {
+            "DVR_CAPTURE_WIDTH" => Some("not-a-number".to_string()),
+            _ => None,
+        });
+        assert_eq!(settings.width, 1920);
     }
 }

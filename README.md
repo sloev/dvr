@@ -42,19 +42,26 @@ The following screenshots are automatically generated during the CI build proces
 
 This project is equipped with a GitHub Actions workflow that automatically triggers on pushes to the `main` branch or when a new tag is pushed.
 
-1. **Build Environment:** Uses `ubuntu-latest` with QEMU `linux/arm64` cross-compilation Docker images.
-2. **Application Compilation:** The DVR Rust application is compiled strictly in its own isolated `aarch64` Alpine container.
-3. **OS Generation:** The `build_os.sh` script constructs the read-only OS partitions and injects the pre-compiled Rust binary natively, creating a single, fully-integrated artifact: `dvr_alpine_aarch64_[VERSION].img`.
+1. **Build Environment:** Uses a native `arm64` GitHub-hosted runner for the Rust build, and QEMU `linux/arm64` emulation on `ubuntu-latest` for OS image assembly.
+2. **Application Compilation:** The DVR Rust application is compiled once, strictly in its own isolated `aarch64` Alpine container, and reused for both board images below.
+3. **OS Generation:** The `build_os.sh` script constructs the read-only OS partitions and injects the pre-compiled Rust binary natively, producing two board-tuned artifacts: `dvr_alpine_aarch64_pi4_[VERSION].img` and `dvr_alpine_aarch64_pi2-3_[VERSION].img`.
 4. **Artifact Versioning:** Images are tagged automatically. Pushes to `main` use the short commit SHA (e.g. `1a2b3c4`), while GitHub tags (e.g. `v1.0.0`) use the semantic tag string.
-5. **Release:** Compresses the `.img` to `.tar.gz` and publishes them directly to the GitHub Releases page.
+5. **Release:** Compresses each `.img` to `.tar.gz` and publishes them directly to the GitHub Releases page.
+
+## Board Support
+
+- **`dvr_alpine_aarch64_pi4_*`** - Raspberry Pi 4 (BCM2711 / VideoCore VI). Full 1920x1080@30fps capture.
+- **`dvr_alpine_aarch64_pi2-3_*`** - Raspberry Pi 2 **v1.2 only** (BCM2837) and Raspberry Pi 3. Reduced 1280x720@30fps capture as a conservative default for the weaker VideoCore IV GPU and Cortex-A53 CPU - raise `DVR_CAPTURE_WIDTH`/`HEIGHT`/`FPS`/`BITRATE` in `/etc/dvr_app.env` on-device if your unit keeps up with more.
+  - The **original Raspberry Pi 2 (v1.1, BCM2836)** is a 32-bit-only chip and cannot run either image - check your board revision before flashing.
+  - Neither image has been validated on physical hardware yet; both are believed compatible based on the shared Alpine aarch64 kernel and GStreamer `v4l2h264enc`/`bcm2835-codec` driver architecture across the Pi family, not confirmed end-to-end.
 
 ## How to Flash
 
-1. Go to the [Releases](https://github.com/sloev/dvr/releases) page and download the latest `dvr_alpine_aarch64.img.tar.gz`.
+1. Go to the [Releases](https://github.com/sloev/dvr/releases) page and download the `.img.tar.gz` matching your board (see [Board Support](#board-support) above).
 2. Extract the archive.
 3. Flash the `.img` to a high-endurance SD Card using BalenaEtcher or `dd`:
    ```bash
-   sudo dd if=dvr_alpine_aarch64.img of=/dev/sdX bs=4M status=progress
+   sudo dd if=dvr_alpine_aarch64_<board>_<version>.img of=/dev/sdX bs=4M status=progress
    ```
 4. Insert into the Raspberry Pi and power on.
 

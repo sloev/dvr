@@ -70,12 +70,16 @@ jobs:
           retention-days: 1
 
   build-os:
-    name: Build OS Image
+    name: Build OS Image (${{ matrix.board }})
     needs: test-and-build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [pi4, pi2-3]
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -95,10 +99,15 @@ jobs:
         with:
           name: compiled-app
           path: dvr_app/target/release/
-          
+
       - name: Fix Permissions
         run: chmod +x dvr_app/target/release/dvr_app
 
+      # Pi 2 v1.2 and Pi 3 share the BCM2837 SoC (VideoCore IV); Pi 4 uses
+      # BCM2711 (VideoCore VI). Same rootfs/kernel/packages either way -
+      # build_os.sh's TARGET_BOARD only tunes the capture resolution/bitrate
+      # baked into /etc/dvr_app.env, since neither path has been validated
+      # on real hardware and Pi 2/3 have much less CPU/GPU headroom.
       - name: Build Alpine Linux OS Image
         run: |
           docker run --rm --privileged \
@@ -107,18 +116,19 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e VERSION=${{ env.VERSION }} \
+            -e TARGET_BOARD=${{ matrix.board }} \
             alpine:latest \
             sh -c "apk add --no-cache parted e2fsprogs dosfstools f2fs-tools util-linux coreutils curl wget && sh build_os.sh"
 
       - name: Compress image
         run: |
-          tar -czvf dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz dvr_alpine_aarch64_${{ env.VERSION }}.img
+          tar -czvf dvr_alpine_aarch64_${{ matrix.board }}_${{ env.VERSION }}.img.tar.gz dvr_alpine_aarch64_${{ matrix.board }}_${{ env.VERSION }}.img
 
       - name: Upload OS image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dvr_alpine_aarch64
-          path: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
+          name: dvr_alpine_aarch64_${{ matrix.board }}
+          path: dvr_alpine_aarch64_${{ matrix.board }}_${{ env.VERSION }}.img.tar.gz
 
   release:
     name: Create Release
@@ -130,15 +140,16 @@ jobs:
         id: vars
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
-      - name: Download OS Image Artifact
+      - name: Download OS Image Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dvr_alpine_aarch64
+          pattern: dvr_alpine_aarch64_*
+          merge-multiple: true
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dvr_alpine_aarch64_${{ env.VERSION }}.img.tar.gz
+          files: dvr_alpine_aarch64_*_${{ env.VERSION }}.img.tar.gz
 
   docs:
     name: Update GitHub Pages
