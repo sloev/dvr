@@ -40,13 +40,13 @@ The following screenshots are automatically generated during the CI build proces
 
 ## CI/CD Pipeline
 
-This project is equipped with a GitHub Actions workflow that automatically triggers on pushes to the `main` branch or when a new tag is pushed.
+This project ships **rolling releases**: every push to `master`/`main` (including merged PRs) automatically builds, versions, and publishes a new GitHub Release - no manual tagging required.
 
 1. **Build Environment:** Uses a native `arm64` GitHub-hosted runner for the Rust build, and QEMU `linux/arm64` emulation on `ubuntu-latest` for OS image assembly.
 2. **Application Compilation:** The DVR Rust application is compiled once, strictly in its own isolated `aarch64` Alpine container, and reused for both board images below.
 3. **OS Generation:** The `build_os.sh` script constructs the read-only OS partitions and injects the pre-compiled Rust binary natively, producing two board-tuned artifacts: `dvr_alpine_aarch64_pi4_[VERSION].img` and `dvr_alpine_aarch64_pi2-3_[VERSION].img`.
-4. **Artifact Versioning:** Images are tagged automatically. Pushes to `main` use the short commit SHA (e.g. `1a2b3c4`), while GitHub tags (e.g. `v1.0.0`) use the semantic tag string.
-5. **Release:** Compresses each `.img` to `.tar.gz` and publishes them directly to the GitHub Releases page.
+4. **Artifact Versioning:** Every run auto-increments `VERSION` to `v0.1.<run number>` (e.g. `v0.1.42`) - no tag needs to be pushed by hand.
+5. **Release:** Compresses each `.img` to `.tar.gz` and publishes a new GitHub Release for that version, with both board images attached and an auto-generated changelog since the previous release.
 
 ## Board Support
 

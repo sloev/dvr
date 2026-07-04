@@ -5,8 +5,6 @@ on:
     branches:
       - master
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 env:
@@ -85,14 +83,12 @@ jobs:
         with:
           platforms: all
 
+      # Rolling release: every master/main push (including merges) gets its
+      # own auto-incrementing version, no manual tagging required. run_number
+      # is unique and monotonically increasing per workflow run.
       - name: Set Version
         id: vars
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          else
-            echo "VERSION=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          fi
+        run: echo "VERSION=v0.1.${{ github.run_number }}" >> $GITHUB_ENV
 
       - name: Download Application Artifact
         uses: actions/download-artifact@v4
@@ -133,12 +129,12 @@ jobs:
   release:
     name: Create Release
     needs: build-os
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Set Version
         id: vars
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        run: echo "VERSION=v0.1.${{ github.run_number }}" >> $GITHUB_ENV
 
       - name: Download OS Image Artifacts
         uses: actions/download-artifact@v4
@@ -146,9 +142,15 @@ jobs:
           pattern: dvr_alpine_aarch64_*
           merge-multiple: true
 
+      # tag_name doesn't exist yet on any push, so this creates it pointing
+      # at the commit that triggered this run and publishes a new release -
+      # no manual `git tag` step required.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.VERSION }}
+          name: ${{ env.VERSION }}
+          generate_release_notes: true
           files: dvr_alpine_aarch64_*_${{ env.VERSION }}.img.tar.gz
 
   docs:
