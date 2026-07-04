@@ -108,7 +108,7 @@ jobs:
             -w /workspace \
             -e VERSION=${{ env.VERSION }} \
             alpine:latest \
-            sh -c "apk add --no-cache parted e2fsprogs dosfstools util-linux coreutils curl wget && sh build_os.sh"
+            sh -c "apk add --no-cache parted e2fsprogs dosfstools f2fs-tools util-linux coreutils curl wget && sh build_os.sh"
 
       - name: Compress image
         run: |
