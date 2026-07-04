@@ -1,0 +1,137 @@
+<!DOCTYPE html><html><head><title>DVR Project</title><meta charset='utf-8'><link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css'><style>body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 45px; } .markdown-body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 45px; }</style></head><body class='markdown-body'>
+<h1 id="antigravity-dvr-system">Antigravity DVR System</h1>
+<p>A highly resilient, hardware-accelerated DVR system built on Alpine
+Linux and Rust. Designed primarily for automotive dashcams and
+continuous video recording appliances.</p>
+<h2 id="features">Features</h2>
+<ul>
+<li><strong>Instant Boot:</strong> Extremely fast, clean boot via
+<code>fbsplash</code> directly into the UI.</li>
+<li><strong>Resilient OS:</strong> Read-only root filesystem
+(<code>aarch64</code>) with <code>tmpfs</code> mounts to completely
+eliminate SD card corruption on sudden power loss.</li>
+<li><strong>Hardware Acceleration:</strong> Zero-copy KMS/DRM rendering
+and V4L2 H264 hardware video encoding (<code>tc358743</code> HDMI to
+CSI-2 support).</li>
+<li><strong>Audio Capture:</strong> I2S Audio capture multiplexed
+directly into the MP4 container.</li>
+<li><strong>Continuous Loop Recording:</strong> Seamless video
+segmentation (<code>splitmuxsink</code>) and auto-deletion of oldest
+files when storage hits 90%.</li>
+<li><strong>Modern Touch UI:</strong> Slint-based dashboard displaying
+live preview, telemetry (FPS, CPU usage, Disk, RAM), and recording
+controls.</li>
+<li><strong>Timeline Markers:</strong> Instantly inject timestamp
+markers into <code>markers.txt</code> and directly into the MP4 file
+metadata (GStreamer Tags).</li>
+<li><strong>Wireless Retrieval:</strong> Built-in WiFi Access Point
+(<code>DVR_DASHCAM_AP</code>) and Axum-based HTTP server for mobile
+video downloads over WLAN.</li>
+</ul>
+<h2 id="ui-screenshots">UI Screenshots</h2>
+<p>The following screenshots are automatically generated during the CI
+build process to reflect the latest UI state:</p>
+<h3 id="main-dashboard">Main Dashboard</h3>
+<figure>
+<img src="screenshots/main_ui.png" alt="Main UI" />
+<figcaption aria-hidden="true">Main UI</figcaption>
+</figure>
+<h3 id="stopmotion-mode">Stopmotion Mode</h3>
+<figure>
+<img src="screenshots/stopmotion_mode.png" alt="Stopmotion Mode" />
+<figcaption aria-hidden="true">Stopmotion Mode</figcaption>
+</figure>
+<h3 id="wi-fi-client-mode">Wi-Fi Client Mode</h3>
+<figure>
+<img src="screenshots/wifi_mode.png" alt="Wi-Fi Mode" />
+<figcaption aria-hidden="true">Wi-Fi Mode</figcaption>
+</figure>
+<h3 id="capture-settings">Capture Settings</h3>
+<figure>
+<img src="screenshots/settings_mode.png" alt="Settings Mode" />
+<figcaption aria-hidden="true">Settings Mode</figcaption>
+</figure>
+<h3 id="gallery">Gallery</h3>
+<figure>
+<img src="screenshots/gallery_mode.png" alt="Gallery Mode" />
+<figcaption aria-hidden="true">Gallery Mode</figcaption>
+</figure>
+<h2 id="project-structure">Project Structure</h2>
+<ul>
+<li><code>build_os.sh</code>: The master script that generates the
+flashable <code>.img</code> via <code>alpine-make-rootfs</code>.</li>
+<li><code>dvr_app/</code>: The Rust application that powers the UI and
+video pipeline.</li>
+<li><code>.github/workflows/build-os.yml</code>: Fully automated CI
+pipeline that tests, builds, and publishes flashable images via GitHub
+Releases.</li>
+</ul>
+<h2 id="cicd-pipeline">CI/CD Pipeline</h2>
+<p>This project is equipped with a GitHub Actions workflow that
+automatically triggers on pushes to the <code>main</code> branch or when
+a new tag is pushed.</p>
+<ol type="1">
+<li><strong>Build Environment:</strong> Uses a native <code>arm64</code>
+GitHub-hosted runner for the Rust build, and QEMU
+<code>linux/arm64</code> emulation on <code>ubuntu-latest</code> for OS
+image assembly.</li>
+<li><strong>Application Compilation:</strong> The DVR Rust application
+is compiled once, strictly in its own isolated <code>aarch64</code>
+Alpine container, and reused for both board images below.</li>
+<li><strong>OS Generation:</strong> The <code>build_os.sh</code> script
+constructs the read-only OS partitions and injects the pre-compiled Rust
+binary natively, producing two board-tuned artifacts:
+<code>dvr_alpine_aarch64_pi4_[VERSION].img</code> and
+<code>dvr_alpine_aarch64_pi2-3_[VERSION].img</code>.</li>
+<li><strong>Artifact Versioning:</strong> Images are tagged
+automatically. Pushes to <code>main</code> use the short commit SHA
+(e.g. <code>1a2b3c4</code>), while GitHub tags
+(e.g. <code>v1.0.0</code>) use the semantic tag string.</li>
+<li><strong>Release:</strong> Compresses each <code>.img</code> to
+<code>.tar.gz</code> and publishes them directly to the GitHub Releases
+page.</li>
+</ol>
+<h2 id="board-support">Board Support</h2>
+<ul>
+<li><strong><code>dvr_alpine_aarch64_pi4_*</code></strong> - Raspberry
+Pi 4 (BCM2711 / VideoCore VI). Full 1920x1080@30fps capture.</li>
+<li><strong><code>dvr_alpine_aarch64_pi2-3_*</code></strong> - Raspberry
+Pi 2 <strong>v1.2 only</strong> (BCM2837) and Raspberry Pi 3. Reduced
+1280x720@30fps capture as a conservative default for the weaker
+VideoCore IV GPU and Cortex-A53 CPU - raise
+<code>DVR_CAPTURE_WIDTH</code>/<code>HEIGHT</code>/<code>FPS</code>/<code>BITRATE</code>
+in <code>/etc/dvr_app.env</code> on-device if your unit keeps up with
+more.
+<ul>
+<li>The <strong>original Raspberry Pi 2 (v1.1, BCM2836)</strong> is a
+32-bit-only chip and cannot run either image - check your board revision
+before flashing.</li>
+<li>Neither image has been validated on physical hardware yet; both are
+believed compatible based on the shared Alpine aarch64 kernel and
+GStreamer <code>v4l2h264enc</code>/<code>bcm2835-codec</code> driver
+architecture across the Pi family, not confirmed end-to-end.</li>
+</ul></li>
+</ul>
+<h2 id="how-to-flash">How to Flash</h2>
+<ol type="1">
+<li><p>Go to the <a
+href="https://github.com/sloev/dvr/releases">Releases</a> page and
+download the <code>.img.tar.gz</code> matching your board (see <a
+href="#board-support">Board Support</a> above).</p></li>
+<li><p>Extract the archive.</p></li>
+<li><p>Flash the <code>.img</code> to a high-endurance SD Card using
+BalenaEtcher or <code>dd</code>:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> dd if=dvr_alpine_aarch64_<span class="op">&lt;</span>board<span class="op">&gt;</span>_<span class="op">&lt;</span>version<span class="op">&gt;</span>.img of=/dev/sdX bs=4M status=progress</span></code></pre></div></li>
+<li><p>Insert into the Raspberry Pi and power on.</p></li>
+</ol>
+<h2 id="advanced-features-status">Advanced Features Status</h2>
+<p>All major features have been successfully migrated to native Rust: -
+<strong>✅ Capturing Stills</strong> - <strong>✅ Timeline Markers (With
+MP4 Tag Injection)</strong> - <strong>✅ USB Formatting (F2FS) &amp;
+Ejection</strong> - <strong>✅ Power Controls</strong> - <strong>✅
+Stopmotion Mode (Multiple Projects &amp; Hardware MP4
+Compilation)</strong> - <strong>✅ On-Device Playback (Gallery via
+MPV/GStreamer playbin)</strong> - <strong>✅ Wi-Fi Client Mode &amp; OSK
+Support</strong> - <strong>✅ Dynamic Capture Settings</strong></p>
+</body></html>
