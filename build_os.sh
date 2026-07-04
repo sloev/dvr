@@ -267,6 +267,12 @@ mount "${LOOP_DEV}p2" mnt_img
 mkdir -p mnt_img/boot
 mount "${LOOP_DEV}p1" mnt_img/boot
 
+# Alpine's kernel/bootloader packages leave compatibility symlinks (e.g.
+# boot/boot -> .) inside the rootfs's /boot - but /boot here is a FAT32
+# partition, which has no concept of symlinks at all, so cp fails trying
+# to recreate them. They're not needed to actually boot, so drop them.
+find "$ROOTFS_DIR/boot" -type l -delete
+
 # Copy rootfs to image
 echo "Copying rootfs to image..."
 cp -a "$ROOTFS_DIR"/* mnt_img/
