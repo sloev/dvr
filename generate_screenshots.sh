@@ -2,7 +2,7 @@
 set -e
 
 echo "Installing screenshot dependencies..."
-sudo apt-get update && sudo apt-get install -y xvfb imagemagick libfontconfig1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+sudo apt-get update && sudo apt-get install -y xvfb imagemagick libfontconfig1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-0
 
 echo "Installing slint-viewer..."
 # Cargo is cached in the workflow, so this is fast on subsequent runs
