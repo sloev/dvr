@@ -86,6 +86,14 @@ rc-update add local default
 
 # Configure boot
 mkdir -p /boot
+# DSI touchscreen (e.g. iPistBit 800x480) - unlike HDMI, DSI panels have no
+# auto-negotiation protocol, so the firmware needs display_auto_detect=1 to
+# probe and enable one at all. Without it the DSI output is simply never
+# turned on: the board boots fine but the screen stays permanently dark.
+# hdmi_force_hotplug=0 keeps HDMI from taking over as primary when nothing
+# is plugged into it, so the DSI framebuffer is what's actually used.
+echo "display_auto_detect=1" >> /boot/config.txt
+echo "hdmi_force_hotplug=0" >> /boot/config.txt
 echo "dtoverlay=vc4-kms-v3d" >> /boot/config.txt
 echo "dtoverlay=tc358743" >> /boot/config.txt
 echo "gpu_mem=256" >> /boot/config.txt
