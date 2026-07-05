@@ -10,6 +10,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Avoid two overlapping Pages deployments racing each other; let an
+# in-flight deployment finish rather than cancelling it mid-upload.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   test-and-build:
     name: Test & Build Application
@@ -154,13 +160,12 @@ jobs:
           files: dvr_alpine_aarch64_*_${{ env.VERSION }}.img.tar.gz
 
   docs:
-    name: Update GitHub Pages
+    name: Build GitHub Pages artifact
     needs: build-os
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -190,8 +195,33 @@ jobs:
           pandoc README.md >> public/index.html
           echo "</body></html>" >> public/index.html
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # Uploads a deployable artifact for the official Pages deployment
+      # action below - this is the "Source: GitHub Actions" mechanism, as
+      # opposed to committing to a gh-pages branch (the "Deploy from a
+      # branch" mechanism). Only one of these actually serves the live site,
+      # whichever this repo's Settings -> Pages -> Source is set to; pushing
+      # to a branch does nothing when the source is "GitHub Actions" (and
+      # vice versa), which is why the previous branch-push approach here
+      # silently never updated the live site.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
+          path: ./public
+
+  deploy-pages:
+    name: Deploy GitHub Pages
+    needs: docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
