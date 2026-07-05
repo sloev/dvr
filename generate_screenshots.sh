@@ -12,18 +12,22 @@ mkdir -p public/screenshots
 
 capture() {
     name=$1
-    echo "Capturing $name..."
+    delay=${2:-3}
+    echo "Capturing $name (warm-up ${delay}s)..."
     xvfb-run -s "-screen 0 1920x1080x24" bash -c "
       slint-viewer dvr_app/ui/main.slint &
       PID=\$!
-      sleep 3
+      sleep $delay
       import -window root public/screenshots/${name}.png
       kill \$PID
     "
 }
 
-# 1. Main UI
-capture "main_ui"
+# 1. Main UI - first launch on a fresh runner needs extra time: Xvfb, Mesa's
+# software-rasterizer shader cache, and slint-viewer's font/glyph atlas are
+# all cold here, so 3s isn't enough and this capture comes out blank. Later
+# captures reuse those now-warm on-disk caches and are fine at the default.
+capture "main_ui" 8
 
 # 2. Stopmotion Mode
 sed -i 's/is-stopmotion-mode: false/is-stopmotion-mode: true/' dvr_app/ui/main.slint
