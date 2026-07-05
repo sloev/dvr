@@ -67,9 +67,10 @@ pipeline that tests, builds, and publishes flashable images via GitHub
 Releases.</li>
 </ul>
 <h2 id="cicd-pipeline">CI/CD Pipeline</h2>
-<p>This project is equipped with a GitHub Actions workflow that
-automatically triggers on pushes to the <code>main</code> branch or when
-a new tag is pushed.</p>
+<p>This project ships <strong>rolling releases</strong>: every push to
+<code>master</code>/<code>main</code> (including merged PRs)
+automatically builds, versions, and publishes a new GitHub Release - no
+manual tagging required.</p>
 <ol type="1">
 <li><strong>Build Environment:</strong> Uses a native <code>arm64</code>
 GitHub-hosted runner for the Rust build, and QEMU
@@ -83,13 +84,13 @@ constructs the read-only OS partitions and injects the pre-compiled Rust
 binary natively, producing two board-tuned artifacts:
 <code>dvr_alpine_aarch64_pi4_[VERSION].img</code> and
 <code>dvr_alpine_aarch64_pi2-3_[VERSION].img</code>.</li>
-<li><strong>Artifact Versioning:</strong> Images are tagged
-automatically. Pushes to <code>main</code> use the short commit SHA
-(e.g. <code>1a2b3c4</code>), while GitHub tags
-(e.g. <code>v1.0.0</code>) use the semantic tag string.</li>
+<li><strong>Artifact Versioning:</strong> Every run auto-increments
+<code>VERSION</code> to <code>v0.1.&lt;run number&gt;</code>
+(e.g. <code>v0.1.42</code>) - no tag needs to be pushed by hand.</li>
 <li><strong>Release:</strong> Compresses each <code>.img</code> to
-<code>.tar.gz</code> and publishes them directly to the GitHub Releases
-page.</li>
+<code>.tar.gz</code> and publishes a new GitHub Release for that
+version, with both board images attached and an auto-generated changelog
+since the previous release.</li>
 </ol>
 <h2 id="board-support">Board Support</h2>
 <ul>
